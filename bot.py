@@ -9,8 +9,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from telegram.constants import ParseMode
 
 # CONFIG
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w")
-OWNER_ID  = int(os.getenv("OWNER_ID", "8420104044"))
+BOT_TOKEN = "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w"
+OWNER_ID = 8420104044
 
 DATA_FILE = "data.json"
 DB_FOLDER = "database"
@@ -19,7 +19,7 @@ LINES_PER_USE = 250
 os.makedirs(DB_FOLDER, exist_ok=True)
 
 # ═══════════════════════════════
-# LOGO (FROM FIRST BOT)
+# LOGO
 # ═══════════════════════════════
 LOGO = (
 "```\n"
@@ -58,9 +58,7 @@ def has_access(uid, d):
     if not rd:
         return False
     exp = rd.get("expires")
-    if exp and datetime.fromisoformat(exp) < datetime.now():
-        return False
-    return True
+    return not exp or datetime.fromisoformat(exp) > datetime.now()
 
 def track(uid, username, first_name, d):
     d.setdefault("members", {})[str(uid)] = {
@@ -73,19 +71,20 @@ def get_files():
     return sorted(os.listdir(DB_FOLDER))
 
 # ═══════════════════════════════
-# PREMIUM TEXT
+# PREMIUM MESSAGE
 # ═══════════════════════════════
 def premium_text(game, sent, total):
     return (
         "🔮 ✨ *PREMIUM FILE GENERATED SUCCESSFULLY!* ✨ 🔮\n\n"
         f"┣ 🎮 {game.upper()}\n"
-        f"┣ 📜 Lines: {sent}\n"
-        f"┣ 💾 Available: {total:,}\n\n"
-        "🔒 Auto delete in 5 mins"
+        f"┣ 📜 Lines Generated: {sent}\n"
+        f"┣ 💾 Database: {total:,}\n"
+        f"┣ 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        "🔒 Auto-delete in 5 minutes"
     )
 
 # ═══════════════════════════════
-# KEYBOARDS (FIRST BOT STYLE)
+# KEYBOARDS
 # ═══════════════════════════════
 def kb_main(uid, d):
     rows = []
@@ -156,6 +155,12 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not is_admin(uid, d): return
         await q.edit_message_text("⚡ ADMIN PANEL", reply_markup=kb_admin())
 
+    elif q.data == "adm_create":
+        await q.edit_message_text(
+            "🔑 CREATE KEY\n\nUse:\n/createkeys <devices> <duration>\n\nExample:\n/createkeys 1 lifetime",
+            reply_markup=kb_admin()
+        )
+
     elif q.data == "status":
         rd = d["redeemed"].get(str(uid))
         if not rd:
@@ -163,7 +168,7 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         exp = rd.get("expires")
-        txt = "Lifetime ♾️" if not exp else exp[:10]
+        txt = "♾️ Lifetime" if not exp else exp[:10]
 
         await q.edit_message_text(
             f"🔑 {rd['key']}\n📅 {txt}",
@@ -200,7 +205,6 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         fname = files[idx]
         path = os.path.join(DB_FOLDER, fname)
 
-        # PROGRESS UI
         msg = await q.message.reply_text("🔍 Initializing 20%...")
         await asyncio.sleep(1)
         await msg.edit_text("⚙️ Processing 50%...")
@@ -232,7 +236,7 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pass
 
 # ═══════════════════════════════
-# CREATE KEY
+# CREATE KEYS
 # ═══════════════════════════════
 async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d = load()
@@ -240,15 +244,40 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id, d):
         return
 
+    if len(ctx.args) < 2:
+        await update.message.reply_text("Usage: /createkeys <devices> <duration>")
+        return
+
     devices = int(ctx.args[0])
     duration = ctx.args[1].lower()
 
-    key = "ZEIJIE-PREMIUM-" + "".join(random.choices(string.ascii_uppercase+string.digits, k=6))
+    key = "ZEIJIE-PREMIUM-" + "".join(random.choices(string.digits, k=8)) + "-" + "".join(random.choices(string.ascii_uppercase+string.digits, k=4))
 
-    d["keys"][key] = {"devices": devices, "duration": duration, "used_by": []}
+    d["keys"][key] = {
+        "devices": devices,
+        "duration": duration,
+        "used_by": []
+    }
     save(d)
 
-    await update.message.reply_text(f"🔑 {key}")
+    if duration == "lifetime":
+        exp = "♾️ Lifetime"
+        dur = "Lifetime"
+    else:
+        exp_date = (datetime.now() + timedelta(days=int(duration))).strftime("%Y-%m-%d")
+        exp = exp_date
+        dur = f"{duration} days"
+
+    await update.message.reply_text(
+        "🔑 *Key Generated!*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"`{key}`\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ Duration : {dur}\n"
+        f"📅 Expires  : {exp}\n"
+        f"👥 Max users: {devices}",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # ═══════════════════════════════
 # REDEEM
