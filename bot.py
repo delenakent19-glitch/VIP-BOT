@@ -53,6 +53,85 @@ LOGO_TEXT = (
 #  WELCOME MESSAGES
 # ════════════════════════════════════════════════
 WELCOME_LINES = [
+    " *ZEIJIE BOT* is locked, loaded, and ready for action.",
+    " Welcome to *ZEIJIE BOT* — your premium gateway.",
+    " *ZEIJIE BOT* online — Precision · Power · Premium.",
+    " *ZEIJIE BOT* activated — built different, built better.",
+    " You've entered *ZEIJIE BOT* — where premium lives.",
+    " *ZEIJIE BOT* is live — Let's get to work.",
+    " *ZEIJIE BOT* standing by — the real deal starts here.",
+    " *ZEIJIE BOT* loaded — No limits, only premium access.",
+]
+
+def random_welcome() -> str:
+    return random.choice(WELCOME_LINES)
+
+# ════════════════════════════════════════════════
+#  MARKDOWN SAFETY
+# ════════════════════════════════════════════════
+def md_safe(text: str) -> str:
+    for ch in ("_", "*", "`", "[", "]", "(", ")", "~", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+def md_safe_v1(text: str) -> str:
+    """For MARKDOWN (v1) mode."""
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+# ════════════════════════════════════════════════
+#  DATA HELPERS
+# ════════════════════════════════════════════════
+def load() -> dict:
+    default = {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
+    if not os.path.exists(DATA_FILE):
+        return default
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        logger.warning("data.json corrupted — starting fresh.")
+        return default
+    for k, v in default.items():
+        d.setdefault(k, v)
+    return d
+
+def save(d: dict):
+    tmp = DATA_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, DATA_FILE)
+    except OSError as e:
+        logger.error("Failed to save data.json: %s", e)
+
+def is_admin(uid, d) -> bool:
+    return str(uid) in [str(x) for x in d.get("admins", [])] or int(uid) == OWNER_ID
+
+def has_access(uid, d) -> bool:
+    if is_admin(uid, d):
+        return True
+    uid_str = str(uid)
+    rd = d.get("re
+LOGO_TEXT = (
+    "```\n"
+    "╔══════════════════════════════════╗\n"
+    "║   ███████╗███████╗██╗██╗██╗     ║\n"
+    "║   ╚══███╔╝██╔════╝██║██║██║     ║\n"
+    "║     ███╔╝ █████╗  ██║██║██║     ║\n"
+    "║    ███╔╝  ██╔══╝  ██║██║██║     ║\n"
+    "║   ███████╗███████╗██║██║███████╗║\n"
+    "║   ╚══════╝╚══════╝╚═╝╚═╝╚══════╝║\n"
+    "║     V  I  P  ·  P  R  E  M      ║\n"
+    "╚══════════════════════════════════╝\n"
+    "```"
+)
+
+# ════════════════════════════════════════════════
+#  WELCOME MESSAGES
+# ════════════════════════════════════════════════
+WELCOME_LINES = [
     "⚡ *ZEIJIE BOT* is locked, loaded, and ready for action.",
     "🔥 Welcome to *ZEIJIE BOT* — your premium gateway.",
     "🌐 *ZEIJIE BOT* online — Precision · Power · Premium.",
