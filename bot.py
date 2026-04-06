@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ════════════════════════════════════════════════
 #  CONFIG
 # ════════════════════════════════════════════════
-BOT_TOKEN     = "8797773644:AAFZZwWXE5b9Jn86eTwRQZiUArxUI8FUA6w"
+BOT_TOKEN     = "8715472565:AAE0lZnHUVS4dNiSZXZ-OQFSeXvCDIBsh6w"
 OWNER_ID      = 8420104044
 ADMIN_USERNAME = "@Zeijie_s"          # Contact admin username
 DATA_FILE     = "data.json"
