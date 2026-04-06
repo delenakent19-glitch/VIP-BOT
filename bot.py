@@ -368,7 +368,8 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()    with open(DATA_FILE) as f:
+    main()    
+    with open(DATA_FILE) as f:
         return json.load(f)
 
 def save(d):
