@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, json, random, string, io, asyncio
+import os, json, random, string, io
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -33,127 +33,63 @@ LOGO = """```
 # ================= DATA =================
 def load():
     if not os.path.exists(DATA_FILE):
-        return {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
-    with open(DATA_FILE) as f:
-        return json.load(f)
+        return {"keys": {}, "users": {}}
+    return json.load(open(DATA_FILE))
 
 def save(d):
-    with open(DATA_FILE, "w") as f:
-        json.dump(d, f, indent=2)
+    json.dump(d, open(DATA_FILE, "w"), indent=2)
 
-def is_admin(uid, d):
-    return str(uid) in d.get("admins", []) or uid == OWNER_ID
-
+# ================= ACCESS =================
 def has_access(uid, d):
-    if is_admin(uid, d):
-        return True
-    rd = d.get("redeemed", {}).get(str(uid))
-    if not rd:
+    user = d["users"].get(uid)
+    if not user:
         return False
-    exp = rd.get("expires")
-    return not exp or datetime.fromisoformat(exp) > datetime.now()
 
-def track(uid, username, first_name, d):
-    d.setdefault("members", {})[str(uid)] = {
-        "username": username or "",
-        "first_name": first_name or "",
-        "joined": datetime.now().isoformat()
-    }
+    exp = user["expire"]
+
+    if exp == "lifetime":
+        return True
+
+    return datetime.now() < datetime.strptime(exp, "%Y-%m-%d %H:%M:%S")
 
 # ================= DATABASE =================
 def get_files():
     return sorted(os.listdir(DB_FOLDER))
 
-def get_chunk_and_update(path):
-    if not os.path.exists(path):
-        return [], 0
-
+def process_file(path):
     with open(path, "r", errors="ignore") as f:
         lines = f.readlines()
 
     if len(lines) < LINES_PER_USE:
-        return [], len(lines)
+        return None, len(lines)
 
-    chunk = lines[:LINES_PER_USE]
+    selected = lines[:LINES_PER_USE]
     remaining = lines[LINES_PER_USE:]
 
-    # AUTO DECREASE
     with open(path, "w") as f:
         f.writelines(remaining)
 
-    return chunk, len(remaining)
+    return selected, len(remaining)
 
-# ================= TIME PARSER =================
-def parse_duration(duration):
-    duration = duration.lower()
-    now = datetime.now()
-
-    if duration == "lifetime":
-        return None
-
-    num = int("".join(filter(str.isdigit, duration)) or 1)
-
-    if "m" in duration:
-        exp = now + timedelta(minutes=num)
-    elif "h" in duration:
-        exp = now + timedelta(hours=num)
-    elif "d" in duration:
-        exp = now + timedelta(days=num)
-    else:
-        exp = now + timedelta(days=num)
-
-    return exp
-
-# ================= TEXT =================
-def premium_text(game, sent, total):
-    return (
-        "🔮 ✨ *PREMIUM FILE GENERATED SUCCESSFULLY!* ✨ 🔮\n\n"
-        f"┣ 🎮 {game.upper()}\n"
-        f"┣ 📜 Lines Generated: {sent}\n"
-        f"┣ 💾 Database: {total:,}\n"
-        f"┣ 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        "🔒 Auto-delete in 5 minutes"
-    )
-
-# ================= KEYBOARDS =================
-def kb_main(uid, d):
-    rows = []
-
-    if is_admin(uid, d):
-        rows.append([InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")])
-
-    rows += [
-        [
-            InlineKeyboardButton("📂 Database", callback_data="db"),
-            InlineKeyboardButton("🔑 Redeem", callback_data="redeem_info")
-        ],
-        [
-            InlineKeyboardButton("👤 Status", callback_data="status"),
-            InlineKeyboardButton("📋 Commands", callback_data="commands")
-        ]
-    ]
-    return InlineKeyboardMarkup(rows)
-
-def kb_admin():
+# ================= KEYBOARD =================
+def main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔑 Create Key", callback_data="adm_create")],
-        [InlineKeyboardButton("🔙 Back", callback_data="home")]
+        [InlineKeyboardButton("📂 Database", callback_data="db"),
+         InlineKeyboardButton("🔑 Redeem", callback_data="redeem")],
+        [InlineKeyboardButton("👤 Status", callback_data="status")]
     ])
 
 # ================= START =================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
     d = load()
-    user = update.effective_user
 
-    track(user.id, user.username, user.first_name, d)
-    save(d)
-
-    status = "✅ Active" if has_access(user.id, d) else "🔒 No Access"
+    status = "✅ Active" if has_access(uid, d) else "🔒 No Access"
 
     await update.message.reply_text(
-        f"{LOGO}\n👋 *{user.first_name}*\n🔐 {status}",
+        f"{LOGO}\n👋 {update.effective_user.first_name}\n🔐 {status}",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb_main(user.id, d)
+        reply_markup=main_kb()
     )
 
 # ================= CALLBACK =================
@@ -162,51 +98,15 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     d = load()
-    uid = q.from_user.id
+    uid = str(q.from_user.id)
 
-    if q.data == "home":
-        await q.edit_message_text(LOGO, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_main(uid, d))
-
-    elif q.data == "commands":
-        await q.edit_message_text(
-            "📋 COMMANDS\n\n/start\n/redeem <key>\n/createkeys",
-            reply_markup=kb_main(uid, d)
-        )
-
-    elif q.data == "redeem_info":
-        await q.edit_message_text("Use:\n/redeem ZEIJIE-PREMIUM-XXXX", reply_markup=kb_main(uid, d))
-
-    elif q.data == "admin":
-        if not is_admin(uid, d): return
-        await q.edit_message_text("⚡ ADMIN PANEL", reply_markup=kb_admin())
-
-    elif q.data == "adm_create":
-        await q.edit_message_text(
-            "Use:\n/createkeys <devices> <duration>\nExample:\n/createkeys 1 10d / 1h / 30m",
-            reply_markup=kb_admin()
-        )
-
-    elif q.data == "status":
-        rd = d["redeemed"].get(str(uid))
-        if not rd:
-            await q.edit_message_text("🔒 No active key")
-            return
-
-        exp = rd.get("expires")
-        txt = "♾️ Lifetime" if not exp else datetime.fromisoformat(exp).strftime("%Y-%m-%d %H:%M")
-
-        await q.edit_message_text(
-            f"🔑 {rd['key']}\n📅 {txt}",
-            reply_markup=kb_main(uid, d)
-        )
-
-    elif q.data == "db":
+    if q.data == "db":
         if not has_access(uid, d):
             await q.edit_message_text("🔒 Access required")
             return
 
-        files = get_files()
         rows = []
+        files = get_files()
 
         for i, f in enumerate(files):
             path = os.path.join(DB_FOLDER, f)
@@ -215,73 +115,92 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             rows.append([
                 InlineKeyboardButton(
                     f"{Path(f).stem.upper()} ({count:,})",
-                    callback_data=f"send_{i}"
+                    callback_data=f"get_{i}"
                 )
             ])
 
-        rows.append([InlineKeyboardButton("🔙 Back", callback_data="home")])
+        rows.append([InlineKeyboardButton("🔙 Back", callback_data="back")])
+
         await q.edit_message_text("📂 DATABASE", reply_markup=InlineKeyboardMarkup(rows))
 
-    elif q.data.startswith("send_"):
+    elif q.data.startswith("get_"):
         idx = int(q.data.split("_")[1])
         files = get_files()
 
-        fname = files[idx]
-        path = os.path.join(DB_FOLDER, fname)
+        path = os.path.join(DB_FOLDER, files[idx])
 
-        msg = await q.message.reply_text("🔄 Processing...")
+        msg = await q.message.reply_text("⚙️ Processing...")
 
-        chunk, remaining = get_chunk_and_update(path)
+        data_lines, remaining = process_file(path)
 
-        if not chunk:
+        if not data_lines:
             await msg.edit_text("❌ Not enough lines")
             return
 
-        bio = io.BytesIO("".join(chunk).encode())
-        bio.name = f"ZEIJIE-PREMIUM-{Path(fname).stem.upper()}.txt"
+        bio = io.BytesIO("".join(data_lines).encode())
+        bio.name = f"ZEIJIE-PREMIUM-{Path(files[idx]).stem.upper()}.txt"
 
         await q.message.reply_document(bio)
 
-        done = await q.message.reply_text(
-            premium_text(Path(fname).stem, len(chunk), remaining),
-            parse_mode=ParseMode.MARKDOWN
+        await msg.edit_text(
+f"""🔮 ✨ PREMIUM FILE GENERATED SUCCESSFULLY! ✨ 🔮
+
+┣ 🎮 {Path(files[idx]).stem.upper()}
+┣ 📜 Lines Generated: {LINES_PER_USE}
+┣ 💾 Database: {remaining:,}
+┣ 🕐 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+🔒 Auto-delete in 5 minutes"""
         )
 
-        await asyncio.sleep(300)
-        try:
-            await done.delete()
-            await msg.delete()
-        except:
-            pass
+    elif q.data == "back":
+        await q.edit_message_text(LOGO, parse_mode=ParseMode.MARKDOWN, reply_markup=main_kb())
+
+# ================= TIME PARSER =================
+def parse_duration(duration):
+    duration = duration.lower()
+
+    if duration == "lifetime":
+        return "lifetime"
+
+    num = int("".join(filter(str.isdigit, duration)) or 1)
+
+    if "m" in duration:
+        return datetime.now() + timedelta(minutes=num)
+    elif "h" in duration:
+        return datetime.now() + timedelta(hours=num)
+    elif "d" in duration:
+        return datetime.now() + timedelta(days=num)
+    else:
+        return datetime.now() + timedelta(days=num)
 
 # ================= CREATE KEY =================
 async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
-
-    if not is_admin(update.effective_user.id, d):
+    if update.effective_user.id != OWNER_ID:
         return
 
-    if len(ctx.args) < 2:
-        await update.message.reply_text("Usage: /createkeys <devices> <duration>")
+    try:
+        devices = int(ctx.args[0])
+        duration = ctx.args[1]
+    except:
+        await update.message.reply_text("Usage: /createkeys <devices> <time>")
         return
-
-    devices = int(ctx.args[0])
-    duration = ctx.args[1]
 
     key = "ZEIJIE-PREMIUM-" + str(random.randint(10000000, 99999999)) + "-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
     exp = parse_duration(duration)
 
+    d = load()
+
     d["keys"][key] = {
         "devices": devices,
-        "duration": duration,
-        "expire": exp.isoformat() if exp else None,
-        "used_by": []
+        "expire": exp.strftime("%Y-%m-%d %H:%M:%S") if exp != "lifetime" else "lifetime",
+        "used": []
     }
 
     save(d)
 
-    exp_text = "♾️ Lifetime" if not exp else exp.strftime("%Y-%m-%d (%H:%M)")
+    exp_text = "Lifetime" if exp == "lifetime" else exp.strftime("%Y-%m-%d (%H:%M:%S)")
 
     await update.message.reply_text(
 f"""🔑 Key Generated!
@@ -299,7 +218,6 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
 
     if not ctx.args:
-        await update.message.reply_text("Usage: /redeem <key>")
         return
 
     key = ctx.args[0]
@@ -310,22 +228,19 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     k = d["keys"][key]
 
-    if uid in k["used_by"]:
-        await update.message.reply_text("⚠️ Already used")
-        return
+    # DEVICE LIMIT
+    if uid not in k["used"]:
+        if len(k["used"]) >= k["devices"]:
+            await update.message.reply_text("❌ Device limit reached")
+            return
+        k["used"].append(uid)
 
-    if len(k["used_by"]) >= int(k["devices"]):
-        await update.message.reply_text("❌ Device limit reached")
-        return
+    expire = k["expire"]
 
-    exp = k.get("expire")
-
-    if exp and datetime.fromisoformat(exp) < datetime.now():
-        await update.message.reply_text("❌ Key expired")
-        return
-
-    k["used_by"].append(uid)
-    d["redeemed"][uid] = {"key": key, "expires": exp}
+    d["users"][uid] = {
+        "key": key,
+        "expire": expire
+    }
 
     save(d)
 
@@ -340,7 +255,7 @@ def main():
     app.add_handler(CommandHandler("redeem", redeem))
     app.add_handler(CallbackQueryHandler(callback))
 
-    print("🔥 ZEIJIE BOT RUNNING")
+    print("BOT RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
