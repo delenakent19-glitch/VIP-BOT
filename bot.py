@@ -105,8 +105,13 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "database":
+    user_id = str(query.from_user.id)
+    data_btn = query.data
+
+    # ================= DATABASE =================
+    if data_btn == "database":
         total = count_lines("garena.txt")
+
         keyboard = [
             [InlineKeyboardButton("🎮 GARENA", callback_data="garena")],
             [InlineKeyboardButton("🔙 Back", callback_data="back")]
@@ -117,17 +122,16 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    elif query.data == "garena":
-        user_id = str(query.from_user.id)
-
+    # ================= GENERATE =================
+    elif data_btn == "garena":
         if user_id not in data["users"]:
-            await query.answer("Access required", show_alert=True)
+            await query.answer("🔒 Access required", show_alert=True)
             return
 
         lines = get_lines("garena.txt", LINES_PER_USE)
 
         if not lines:
-            await query.answer("Not enough lines", show_alert=True)
+            await query.answer("❌ Not enough lines", show_alert=True)
             return
 
         filename = "ZEIJIE-PREMIUM-GARENA.txt"
@@ -150,9 +154,18 @@ f"""✨🔮 PREMIUM FILE GENERATED SUCCESSFULLY! 🔮✨
 🔒 Auto-delete in 5 minutes"""
         )
 
-    elif query.data == "back":
-        await start(update, context)
+    # ================= BACK =================
+    elif data_btn == "back":
+        keyboard = [
+            [InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")],
+            [InlineKeyboardButton("📂 Database", callback_data="database")],
+            [InlineKeyboardButton("👤 Status", callback_data="status")]
+        ]
 
+        await query.edit_message_text(
+            f"{LOGO}\n\nWelcome!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 # ================== CREATE KEYS ==================
 async def createkeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
