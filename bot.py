@@ -33,7 +33,6 @@ os.makedirs(DB_FOLDER, exist_ok=True)
 # ════════════════════════════════════════════════
 #  LOGO
 # ════════════════════════════════════════════════
-LOGO_GIF_URL = "https://i.pinimg.com/originals/89/5c/e7/895ce751ba0379700381d17a67086931.gif"
 
 LOGO_TEXT = (
     "```\n"
