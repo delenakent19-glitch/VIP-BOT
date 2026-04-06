@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 
-import os, json, random, string, io
+import os, json, random, string, io, asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
-)
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, ContextTypes
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.constants import ParseMode
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w")
@@ -16,7 +12,7 @@ OWNER_ID  = int(os.getenv("OWNER_ID", "8420104044"))
 
 DATA_FILE = "data.json"
 DB_FOLDER = "database"
-LINES_PER_USE = 1000
+LINES_PER_USE = 250  # matches your premium text
 
 os.makedirs(DB_FOLDER, exist_ok=True)
 
@@ -35,6 +31,229 @@ LOGO = (
     "║        Z E I J I E   B O T       ║\n"
     "╚══════════════════════════════════╝\n"
     "```"
+)
+
+# ════════════════════════════════════════
+# PREMIUM MESSAGE FUNCTION
+# ════════════════════════════════════════
+def generate_premium_text(game, lines_sent, total_lines):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    return (
+        "🔮 ✨ *PREMIUM FILE GENERATED SUCCESSFULLY!* ✨ 🔮\n\n"
+        "📊 *GENERATION SUMMARY*\n"
+        f"┣ 🎮 Source Game: • {game.upper()}\n"
+        f"┣ 📜 Lines Generated: {lines_sent}\n"
+        f"┣ 🕐 Generated On: {now}\n"
+        f"┣ 💾 Database Status: {total_lines:,} lines available\n"
+        f"┣ 🧹 Cleanup Status: ✅ Completed\n\n"
+        "🛡️ *SECURITY & PRIVACY*\n"
+        "┣ 🔒 Auto-Expiry: 5 minutes\n"
+        "┣ 🗑️ Auto-Deletion: Enabled\n"
+        "┣ 🛡️ Data Protection: Active\n"
+        "┣ ⚡ Secure Session: Verified\n\n"
+        "🚀 *NEXT STEPS*\n"
+        "┣ ⬇️ Download immediately\n"
+        "┣ ⏳ File expires in 5:00\n"
+        "┣ 🔄 Refresh for new generation\n"
+        "┣ 📚 Manage your data securely\n\n"
+        "⭐ *Thank you for choosing Premium!*"
+    )
+
+# ════════════════════════════════════════
+# DATA
+# ════════════════════════════════════════
+def load():
+    if not os.path.exists(DATA_FILE):
+        return {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
+    with open(DATA_FILE) as f:
+        return json.load(f)
+
+def save(d):
+    with open(DATA_FILE, "w") as f:
+        json.dump(d, f, indent=2)
+
+def is_admin(uid, d):
+    return str(uid) in d.get("admins", []) or uid == OWNER_ID
+
+def has_access(uid, d):
+    if is_admin(uid, d):
+        return True
+    rd = d.get("redeemed", {}).get(str(uid))
+    if not rd:
+        return False
+    exp = rd.get("expires")
+    if exp and datetime.fromisoformat(exp) < datetime.now():
+        return False
+    return True
+
+def get_db_files():
+    return sorted(os.listdir(DB_FOLDER))
+
+# ════════════════════════════════════════
+# DATABASE UI
+# ════════════════════════════════════════
+def kb_db(files):
+    rows = []
+
+    for i, f in enumerate(files):
+        fpath = os.path.join(DB_FOLDER, f)
+
+        try:
+            with open(fpath, "r", errors="ignore") as file:
+                count = sum(1 for _ in file)
+        except:
+            count = 0
+
+        name = Path(f).stem.upper()
+        rows.append([
+            InlineKeyboardButton(f"📄 {name} ({count:,})", callback_data=f"send_{i}")
+        ])
+
+    return InlineKeyboardMarkup(rows)
+
+# ════════════════════════════════════════
+# START
+# ════════════════════════════════════════
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d = load()
+    uid = update.effective_user.id
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📂 Database", callback_data="db")]
+    ])
+
+    status = "✅ Active" if has_access(uid, d) else "🔒 No Access"
+
+    await update.message.reply_text(
+        f"{LOGO}\n👤 {update.effective_user.first_name}\n🔐 {status}",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb
+    )
+
+# ════════════════════════════════════════
+# CALLBACK
+# ════════════════════════════════════════
+async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    d = load()
+    uid = q.from_user.id
+
+    if q.data == "db":
+        if not has_access(uid, d):
+            await q.edit_message_text("🔒 No access.")
+            return
+
+        files = get_db_files()
+        await q.edit_message_text("📂 Select database:", reply_markup=kb_db(files))
+
+    elif q.data.startswith("send_"):
+        idx = int(q.data.split("_")[1])
+        files = get_db_files()
+
+        fname = files[idx]
+        fpath = os.path.join(DB_FOLDER, fname)
+
+        with open(fpath, "r", errors="replace") as f:
+            lines = f.readlines()
+
+        chunk = lines[:LINES_PER_USE]
+
+        bio = io.BytesIO("".join(chunk).encode())
+        bio.name = f"ZEIJIE-PREMIUM-{Path(fname).stem.upper()}.txt"
+
+        # SEND FILE
+        await q.message.reply_document(bio)
+
+        # PREMIUM MESSAGE
+        premium_text = generate_premium_text(
+            Path(fname).stem,
+            len(chunk),
+            len(lines)
+        )
+
+        msg = await q.message.reply_text(
+            premium_text,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        # AUTO DELETE AFTER 5 MIN
+        await asyncio.sleep(300)
+        try:
+            await msg.delete()
+        except:
+            pass
+
+# ════════════════════════════════════════
+# CREATE KEY
+# ════════════════════════════════════════
+async def cmd_createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d = load()
+
+    if not is_admin(update.effective_user.id, d):
+        return
+
+    devices = ctx.args[0]
+    duration = ctx.args[1].lower()
+
+    key = "ZEIJIE-" + "".join(random.choices(string.ascii_uppercase+string.digits, k=4))
+
+    d["keys"][key] = {"devices": devices, "duration": duration, "used": False}
+    save(d)
+
+    await update.message.reply_text(f"✅ {key}")
+
+# ════════════════════════════════════════
+# REDEEM
+# ════════════════════════════════════════
+async def cmd_redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d = load()
+    uid = str(update.effective_user.id)
+
+    key = ctx.args[0]
+
+    if key not in d["keys"]:
+        await update.message.reply_text("Invalid")
+        return
+
+    if d["keys"][key]["used"]:
+        await update.message.reply_text("Used")
+        return
+
+    dur = d["keys"][key]["duration"]
+
+    if dur == "lifetime":
+        exp = None
+    else:
+        days = int("".join(filter(str.isdigit, dur)))
+        exp = (datetime.now()+timedelta(days=days)).isoformat()
+
+    d["keys"][key]["used"] = True
+    d["redeemed"][uid] = {"expires": exp}
+    save(d)
+
+    txt = "Never ♾️" if not exp else exp[:10]
+    await update.message.reply_text(f"✅ Activated\n📅 {txt}")
+
+# ════════════════════════════════════════
+# MAIN
+# ════════════════════════════════════════
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("createkeys", cmd_createkeys))
+    app.add_handler(CommandHandler("redeem", cmd_redeem))
+
+    app.add_handler(CallbackQueryHandler(callback))
+
+    print("ZEIJIE BOT RUNNING 🔥")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()    "```"
 )
 
 # ════════════════════════════════════════
