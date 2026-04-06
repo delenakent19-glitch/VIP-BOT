@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # ════════════════════════════════════════════════
 #  CONFIG
 # ════════════════════════════════════════════════
-BOT_TOKEN     = "8797773644:AAFZZwWXE5b9Jn86eTwRQZiUArxUI8FUA6w"
+BOT_TOKEN     = "8797773644:AAGVRTd0EMjxmER1YSMODB-ShMTCuYV3afA"
 OWNER_ID      = 8420104044
 DATA_FILE     = "data.json"
 DB_FOLDER     = "database"
