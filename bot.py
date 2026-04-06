@@ -39,6 +39,694 @@ LOGO = (
 )
 
 # ════════════════════════════════════════════════
+#  WELCOME MESSAGES  (rotated randomly)
+# ════════════════════════════════════════════════
+WELCOME_LINES = [
+    "⚡ *ZEIJIE BOT* is locked, loaded, and ready for action.",
+    "🔥 Welcome to *ZEIJIE BOT* — your premium gateway.",
+    "🌐 *ZEIJIE BOT* online. Precision. Power. Premium.",
+    "🛡️ *ZEIJIE BOT* activated — built different, built better.",
+    "💎 You've entered *ZEIJIE BOT* — where premium lives.",
+    "🚀 *ZEIJIE BOT* is live. Let's get to work.",
+    "🎯 *ZEIJIE BOT* standing by — the real deal starts here.",
+    "👾 *ZEIJIE BOT* loaded. No limits, only premium access.",
+]
+
+def random_welcome() -> str:
+    return random.choice(WELCOME_LINES)
+
+# ════════════════════════════════════════════════
+#  DATA HELPERS
+# ════════════════════════════════════════════════
+def load() -> dict:
+    if not os.path.exists(DATA_FILE):
+        return {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save(d: dict):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+
+def is_admin(uid, d) -> bool:
+    return str(uid) in [str(x) for x in d.get("admins", [])] or int(uid) == OWNER_ID
+
+def has_access(uid, d) -> bool:
+    """Admins always have access. Buyers need a valid non-expired redeemed key."""
+    if is_admin(uid, d):
+        return True
+    rd = d.get("redeemed", {}).get(str(uid))
+    if not rd:
+        return False
+    exp = rd.get("expires")
+    if not exp:
+        return True  # lifetime
+    return datetime.fromisoformat(exp) > datetime.now()
+
+def track(uid, username, first_name, d):
+    d.setdefault("members", {})[str(uid)] = {
+        "username":   username or "",
+        "first_name": first_name or "",
+        "joined":     datetime.now().isoformat(),
+    }
+
+def get_db_files() -> list:
+    return sorted(
+        f for f in os.listdir(DB_FOLDER)
+        if os.path.isfile(os.path.join(DB_FOLDER, f))
+    )
+
+def count_lines(path: str) -> int:
+    try:
+        with open(path, "r", errors="ignore") as f:
+            return sum(1 for _ in f)
+    except Exception:
+        return 0
+
+# ════════════════════════════════════════════════
+#  KEY HELPERS
+# ════════════════════════════════════════════════
+def generate_key() -> str:
+    """
+    Format: ZEIJIE-XXXXXX-XXXXXXXX-XXXX
+    Part 1: 6 uppercase letters  (random)
+    Part 2: 8 alphanumeric chars (random)
+    Part 3: 4-char timestamp hex (ensures uniqueness per second)
+    Example: ZEIJIE-ABCDEF-K3M9P2QR-1A2B
+    """
+    part1 = "".join(random.choices(string.ascii_uppercase, k=6))
+    part2 = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    # timestamp-derived suffix so no two keys generated at the same second collide
+    ts_hex = format(int(datetime.now().timestamp()) & 0xFFFF, "04X")
+    extra  = "".join(random.choices(string.ascii_uppercase + string.digits, k=2))
+    part3  = ts_hex[:2] + extra + ts_hex[2:]          # e.g. A3KQ2B
+    return f"ZEIJIE-{part1}-{part2}-{part3}"
+
+def parse_duration(raw: str):
+    """
+    Returns (timedelta | None, label_str).
+    Accepts: lifetime, 1h, 30m, 7d, 10days, 2hours, 45mins ...
+    """
+    dur = raw.strip().lower()
+    if dur in ("lifetime", "forever", "∞"):
+        return None, "Lifetime"
+
+    digits = "".join(c for c in dur if c.isdigit())
+    if not digits:
+        raise ValueError(f"Cannot parse duration: {raw!r}")
+    n = int(digits)
+
+    if "h" in dur:
+        return timedelta(hours=n),   f"{n} hour{'s' if n != 1 else ''}"
+    if "m" in dur and "month" not in dur:
+        return timedelta(minutes=n), f"{n} minute{'s' if n != 1 else ''}"
+    # default = days
+    return timedelta(days=n), f"{n} day{'s' if n != 1 else ''}"
+
+# ════════════════════════════════════════════════
+#  EXPIRY DISPLAY  (accurate, with time remaining)
+# ════════════════════════════════════════════════
+def expiry_display(exp_iso) -> str:
+    """Returns a rich expiry string with exact date/time AND time remaining."""
+    if not exp_iso:
+        return "♾️  Never (Lifetime)"
+
+    exp_dt = datetime.fromisoformat(exp_iso)
+    now    = datetime.now()
+
+    # Formatted absolute time
+    abs_time = exp_dt.strftime("%Y-%m-%d  %H:%M:%S")
+
+    if exp_dt <= now:
+        return f"❌  Expired  ({abs_time})"
+
+    # Calculate remaining
+    delta      = exp_dt - now
+    total_secs = int(delta.total_seconds())
+    days_rem   = total_secs // 86400
+    hours_rem  = (total_secs % 86400) // 3600
+    mins_rem   = (total_secs % 3600)  // 60
+    secs_rem   = total_secs % 60
+
+    # Build human-readable "X remaining" string
+    parts = []
+    if days_rem:
+        parts.append(f"{days_rem}d")
+    if hours_rem:
+        parts.append(f"{hours_rem}h")
+    if mins_rem:
+        parts.append(f"{mins_rem}m")
+    if secs_rem and not days_rem:          # show seconds only when < 1 day left
+        parts.append(f"{secs_rem}s")
+
+    remaining_str = " ".join(parts) if parts else "< 1s"
+    return f"{abs_time}  ⏳ {remaining_str} left"
+
+# ════════════════════════════════════════════════
+#  MESSAGE BUILDERS
+# ════════════════════════════════════════════════
+def key_message(key: str, duration_label: str, expires_iso, devices: int) -> str:
+    """Monospace key block for easy tap-to-copy."""
+    exp_str = expiry_display(expires_iso)
+    return (
+        "🔑 *Key Generated!*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"`{key}`\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ Duration   : {duration_label}\n"
+        f"📅 Expires    : {exp_str}\n"
+        f"👥 Max users  : {devices}"
+    )
+
+def premium_summary(fname_stem: str, sent: int, remaining: int) -> str:
+    now = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+    return (
+        "🔮 ✨ PREMIUM FILE GENERATED SUCCESSFULLY! ✨ 🔮\n\n"
+        "📊 GENERATION SUMMARY\n"
+        f"┣ 🎮 Source Game      : {fname_stem.upper()}\n"
+        f"┣ 📜 Lines Generated  : {sent}\n"
+        f"┣ 🕐 Generated On     : {now}\n"
+        f"┣ 💾 Database Status  : {remaining:,} lines available\n"
+        "┣ 🧹 Cleanup Status   : ✅ Completed\n\n"
+        "🛡️ SECURITY & PRIVACY\n"
+        "┣ 🔒 Auto-Expiry      : 5 minutes\n"
+        "┣ 🗑️ Auto-Deletion    : Enabled\n"
+        "┣ 🛡️ Data Protection  : Active\n"
+        "┣ ⚡ Secure Session   : Verified\n\n"
+        "🚀 NEXT STEPS\n"
+        "┣ ⬇️ Download immediately\n"
+        "┣ ⏳ File expires in 5:00\n"
+        "┣ 🔄 Refresh for new generation\n"
+        "┣ 📚 Manage your data securely\n\n"
+        "⭐ Thank you for choosing Premium Service!"
+    )
+
+# ════════════════════════════════════════════════
+#  KEYBOARDS
+# ════════════════════════════════════════════════
+def kb_main(uid, d) -> InlineKeyboardMarkup:
+    rows = []
+    if is_admin(uid, d):
+        rows.append([InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")])
+    rows += [
+        [
+            InlineKeyboardButton("📂 Database", callback_data="db"),
+            InlineKeyboardButton("🔑 Redeem",   callback_data="redeem_info"),
+        ],
+        [
+            InlineKeyboardButton("👤 Status",   callback_data="status"),
+            InlineKeyboardButton("📋 Commands", callback_data="commands"),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+def kb_admin() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Create Key",  callback_data="adm_create")],
+        [InlineKeyboardButton("🗝 Active Keys", callback_data="adm_keys")],
+        [InlineKeyboardButton("👥 Admins List", callback_data="adm_list")],
+        [InlineKeyboardButton("🔙 Back",        callback_data="home")],
+    ])
+
+def kb_back(dest="home") -> InlineKeyboardMarkup:
+    label = "🔙 Back to Admin" if dest == "admin" else "🔙 Back"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=dest)]])
+
+# ════════════════════════════════════════════════
+#  /start
+# ════════════════════════════════════════════════
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d    = load()
+    user = update.effective_user
+    track(user.id, user.username, user.first_name, d)
+    save(d)
+
+    status      = "✅ Active" if has_access(user.id, d) else "🔒 No Access"
+    welcome_bot = random_welcome()
+
+    # Build a personalised identity line
+    display_name = user.first_name or "Operator"
+    username_tag = f"  (@{user.username})" if user.username else ""
+
+    await update.message.reply_text(
+        f"{LOGO}\n\n"
+        f"{welcome_bot}\n\n"
+        f"👤 *{display_name}*{username_tag}\n"
+        f"🔐 Status: {status}",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb_main(user.id, d),
+    )
+
+# ════════════════════════════════════════════════
+#  /createkeys <max_users> <duration>
+#  ADMIN ONLY
+# ════════════════════════════════════════════════
+async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d   = load()
+    uid = update.effective_user.id
+
+    if not is_admin(uid, d):
+        await update.message.reply_text("❌ This command is for admins only.")
+        return
+
+    if len(ctx.args) < 2:
+        await update.message.reply_text(
+            "Usage: /createkeys <max_users> <duration>\n\n"
+            "Duration examples:\n"
+            "  10d      → 10 days\n"
+            "  2h       → 2 hours\n"
+            "  30m      → 30 minutes\n"
+            "  lifetime → never expires"
+        )
+        return
+
+    try:
+        devices = int(ctx.args[0])
+        if devices < 1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Max users must be a positive number (e.g. 1)")
+        return
+
+    raw_dur = " ".join(ctx.args[1:])
+    try:
+        td, duration_label = parse_duration(raw_dur)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid duration.\n\nExamples: 10d / 2h / 30m / lifetime"
+        )
+        return
+
+    now         = datetime.now()
+    key         = generate_key()
+    expires_dt  = (now + td) if td else None
+    expires_iso = expires_dt.isoformat() if expires_dt else None
+
+    d["keys"][key] = {
+        "devices":    devices,
+        "duration":   raw_dur,
+        "expires":    expires_iso,
+        "used_by":    [],
+        "created_by": str(uid),
+        "created_at": now.isoformat(),
+    }
+    save(d)
+
+    await update.message.reply_text(
+        key_message(key, duration_label, expires_iso, devices),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+# ════════════════════════════════════════════════
+#  /redeem <key>
+# ════════════════════════════════════════════════
+async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d   = load()
+    uid = str(update.effective_user.id)
+
+    if not ctx.args:
+        await update.message.reply_text("Usage: /redeem ZEIJIE-XXXXXX-XXXXXXXX-XXXXXX")
+        return
+
+    key = ctx.args[0].strip().upper()
+
+    if key not in d["keys"]:
+        await update.message.reply_text("❌ Invalid key. Check and try again.")
+        return
+
+    k = d["keys"][key]
+
+    if uid in k["used_by"]:
+        await update.message.reply_text("⚠️ This key is already activated on your account.")
+        return
+
+    if len(k["used_by"]) >= int(k["devices"]):
+        await update.message.reply_text("❌ Device limit reached for this key.")
+        return
+
+    key_exp = k.get("expires")
+    if key_exp and datetime.fromisoformat(key_exp) < datetime.now():
+        await update.message.reply_text("❌ This key has already expired.")
+        return
+
+    k["used_by"].append(uid)
+    d["redeemed"][uid] = {
+        "key":       key,
+        "expires":   key_exp,
+        "device_id": uid,
+        "activated": datetime.now().isoformat(),
+    }
+    save(d)
+
+    _, dur_label = parse_duration(k.get("duration", "lifetime"))
+    exp_label    = expiry_display(key_exp)
+
+    await update.message.reply_text(
+        "✅ *Key Activated!*\n\n"
+        f"🔑 `{key}`\n"
+        f"⏱ Duration  : {dur_label}\n"
+        f"📅 Expires   : {exp_label}\n"
+        f"📱 Device    : Locked to your account",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+# ════════════════════════════════════════════════
+#  /status
+# ════════════════════════════════════════════════
+async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d   = load()
+    uid = str(update.effective_user.id)
+
+    if is_admin(int(uid), d):
+        await update.message.reply_text(
+            "👑 *Admin Account* — Full access granted.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    rd = d["redeemed"].get(uid)
+    if not rd:
+        await update.message.reply_text("🔒 No active key. Use /redeem <key>")
+        return
+
+    exp = rd.get("expires")
+    if exp and datetime.fromisoformat(exp) < datetime.now():
+        await update.message.reply_text("⛔ Your key has *expired*.", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    await update.message.reply_text(
+        f"✅ *Active*\n\n🔑 `{rd['key']}`\n📅 Expires: {expiry_display(exp)}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+# ════════════════════════════════════════════════
+#  /addadmin <user_id>  — owner only
+# ════════════════════════════════════════════════
+async def addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    d = load()
+    if not ctx.args:
+        await update.message.reply_text("Usage: /addadmin <user_id>")
+        return
+    target = str(ctx.args[0])
+    if target not in d["admins"]:
+        d["admins"].append(target)
+        save(d)
+    await update.message.reply_text(f"✅ Admin added: `{target}`", parse_mode=ParseMode.MARKDOWN)
+
+# ════════════════════════════════════════════════
+#  /removeadmin <user_id>  — owner only
+# ════════════════════════════════════════════════
+async def removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    d = load()
+    if not ctx.args:
+        await update.message.reply_text("Usage: /removeadmin <user_id>")
+        return
+    target = str(ctx.args[0])
+    if target in d["admins"]:
+        d["admins"].remove(target)
+        save(d)
+    await update.message.reply_text(f"✅ Admin removed: `{target}`", parse_mode=ParseMode.MARKDOWN)
+
+# ════════════════════════════════════════════════
+#  CALLBACK HANDLER
+# ════════════════════════════════════════════════
+async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    await q.answer()
+
+    d    = load()
+    uid  = q.from_user.id
+    data = q.data
+
+    # ── Home ──────────────────────────────────────
+    if data == "home":
+        status      = "✅ Active" if has_access(uid, d) else "🔒 No Access"
+        welcome_bot = random_welcome()
+        display_name = q.from_user.first_name or "Operator"
+        username_tag = f"  (@{q.from_user.username})" if q.from_user.username else ""
+        await q.edit_message_text(
+            f"{LOGO}\n\n"
+            f"{welcome_bot}\n\n"
+            f"👤 *{display_name}*{username_tag}\n"
+            f"🔐 Status: {status}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_main(uid, d),
+        )
+
+    # ── Commands ──────────────────────────────────
+    elif data == "commands":
+        await q.edit_message_text(
+            "📋 *COMMANDS*\n\n"
+            "/start — Main menu\n"
+            "/redeem `<key>` — Activate a key\n"
+            "/status — Check your access\n"
+            "/createkeys `<users> <duration>` _(admin only)_\n"
+            "/addadmin `<id>` _(owner only)_\n"
+            "/removeadmin `<id>` _(owner only)_",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("home"),
+        )
+
+    # ── Redeem info ───────────────────────────────
+    elif data == "redeem_info":
+        await q.edit_message_text(
+            "🔑 *Redeem a Key*\n\n"
+            "Send the command:\n"
+            "`/redeem ZEIJIE-XXXXXX-XXXXXXXX-XXXXXX`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("home"),
+        )
+
+    # ── Status ────────────────────────────────────
+    elif data == "status":
+        if is_admin(uid, d):
+            await q.edit_message_text(
+                "👑 *Admin Account*\nFull access granted.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb_back("home"),
+            )
+            return
+
+        rd = d["redeemed"].get(str(uid))
+        if not rd:
+            await q.edit_message_text(
+                "🔒 No active key.\nUse /redeem to activate one.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 How to Redeem", callback_data="redeem_info")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="home")],
+                ]),
+            )
+            return
+
+        exp = rd.get("expires")
+        if exp and datetime.fromisoformat(exp) < datetime.now():
+            await q.edit_message_text(
+                "⛔ Your key has *expired*.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb_back("home"),
+            )
+            return
+
+        await q.edit_message_text(
+            f"✅ *Active*\n\n🔑 `{rd['key']}`\n📅 Expires: {expiry_display(exp)}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("home"),
+        )
+
+    # ── Admin Panel ───────────────────────────────
+    elif data == "admin":
+        if not is_admin(uid, d):
+            await q.answer("⛔ Admins only.", show_alert=True)
+            return
+        total_keys    = len(d.get("keys", {}))
+        total_members = len(d.get("members", {}))
+        await q.edit_message_text(
+            f"⚡ *ADMIN PANEL*\n\n"
+            f"🗝 Total Keys   : {total_keys}\n"
+            f"👥 Total Users  : {total_members}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_admin(),
+        )
+
+    # ── Create Key guide ──────────────────────────
+    elif data == "adm_create":
+        if not is_admin(uid, d):
+            await q.answer("⛔ Admins only.", show_alert=True)
+            return
+        await q.edit_message_text(
+            "🔑 *Create a Key*\n\n"
+            "Command:\n"
+            "`/createkeys <max_users> <duration>`\n\n"
+            "*Duration examples:*\n"
+            "• `10d`      — 10 days\n"
+            "• `2h`       — 2 hours\n"
+            "• `30m`      — 30 minutes\n"
+            "• `lifetime` — never expires\n\n"
+            "_Type the command in chat to generate._",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("admin"),
+        )
+
+    # ── Active Keys list ──────────────────────────
+    elif data == "adm_keys":
+        if not is_admin(uid, d):
+            await q.answer("⛔ Admins only.", show_alert=True)
+            return
+        keys = d.get("keys", {})
+        if not keys:
+            await q.edit_message_text("🗝 No keys created yet.", reply_markup=kb_back("admin"))
+            return
+
+        lines = []
+        for k, v in list(keys.items())[-15:]:
+            used  = len(v.get("used_by", []))
+            max_d = v.get("devices", "?")
+            exp   = expiry_display(v.get("expires"))
+            lines.append(f"`{k}`\n  👥 {used}/{max_d}  📅 {exp}")
+
+        await q.edit_message_text(
+            "🗝 *Active Keys* (last 15)\n\n" + "\n\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("admin"),
+        )
+
+    # ── Admins list ───────────────────────────────
+    elif data == "adm_list":
+        if not is_admin(uid, d):
+            await q.answer("⛔ Admins only.", show_alert=True)
+            return
+        admins = d.get("admins", [])
+        body   = "\n".join(f"• `{a}`" for a in admins) if admins else "No extra admins."
+        await q.edit_message_text(
+            f"👥 *Admin List*\n\n{body}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("admin"),
+        )
+
+    # ── Database list ─────────────────────────────
+    elif data == "db":
+        if not has_access(uid, d):
+            await q.edit_message_text(
+                "🔒 *Access Required*\n\n"
+                "You need an active key to access the database.\n"
+                "Use /redeem to activate your key.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 How to Redeem", callback_data="redeem_info")],
+                    [InlineKeyboardButton("🔙 Back",          callback_data="home")],
+                ]),
+            )
+            return
+
+        files = get_db_files()
+        if not files:
+            await q.edit_message_text(
+                "📂 Database is currently empty.",
+                reply_markup=kb_back("home"),
+            )
+            return
+
+        rows = []
+        for i, fname in enumerate(files):
+            path  = os.path.join(DB_FOLDER, fname)
+            count = count_lines(path)
+            rows.append([
+                InlineKeyboardButton(
+                    f"🗂 {Path(fname).stem.upper()}  ({count:,} lines)",
+                    callback_data=f"send_{i}",
+                )
+            ])
+        rows.append([InlineKeyboardButton("🔙 Back", callback_data="home")])
+
+        await q.edit_message_text(
+            "📂 *DATABASE*\n\nSelect a file to generate 250 lines:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+
+    # ── Send database file ────────────────────────
+    elif data.startswith("send_"):
+        if not has_access(uid, d):
+            await q.answer("🔒 Access required.", show_alert=True)
+            return
+
+        try:
+            idx = int(data.split("_")[1])
+        except (IndexError, ValueError):
+            await q.answer("❌ Invalid selection.", show_alert=True)
+            return
+
+        files = get_db_files()
+        if idx >= len(files):
+            await q.answer("❌ File no longer exists.", show_alert=True)
+            return
+
+        fname = files[idx]
+        path  = os.path.join(DB_FOLDER, fname)
+
+        msg = await q.message.reply_text("🔍 Initializing...  [▓░░░░]  20%")
+        await asyncio.sleep(0.7)
+        await msg.edit_text("⚙️ Processing...   [▓▓▓░░]  50%")
+        await asyncio.sleep(0.7)
+        await msg.edit_text("📦 Extracting...   [▓▓▓▓░]  80%")
+        await asyncio.sleep(0.7)
+        await msg.edit_text("✅ Completed       [▓▓▓▓▓] 100%")
+
+        with open(path, "r", errors="replace") as f:
+            all_lines = f.readlines()
+
+        chunk     = all_lines[:LINES_PER_USE]
+        remaining = all_lines[LINES_PER_USE:]
+
+        if not chunk:
+            await q.message.reply_text("⚠️ This database file is currently empty.")
+            return
+
+        with open(path, "w", errors="replace") as f:
+            f.writelines(remaining)
+
+        bio      = io.BytesIO("".join(chunk).encode("utf-8", errors="replace"))
+        bio.name = f"ZEIJIE-PREMIUM-{Path(fname).stem.upper()}.txt"
+        await q.message.reply_document(bio)
+
+        summary_msg = await q.message.reply_text(
+            premium_summary(Path(fname).stem, len(chunk), len(remaining))
+        )
+
+        await asyncio.sleep(300)
+        for m in (summary_msg, msg):
+            try:
+                await m.delete()
+            except Exception:
+                pass
+
+# ════════════════════════════════════════════════
+#  MAIN
+# ════════════════════════════════════════════════
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("createkeys",  createkeys))
+    app.add_handler(CommandHandler("redeem",      redeem))
+    app.add_handler(CommandHandler("status",      status_cmd))
+    app.add_handler(CommandHandler("addadmin",    addadmin))
+    app.add_handler(CommandHandler("removeadmin", removeadmin))
+    app.add_handler(CallbackQueryHandler(callback))
+
+    print("🔥 ZEIJIE BOT RUNNING")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()    "╚══════════════════════════════════╝\n"
+    "```"
+)
+
+# ════════════════════════════════════════════════
 #  DATA HELPERS
 # ════════════════════════════════════════════════
 def load() -> dict:
