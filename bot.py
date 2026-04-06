@@ -17,10 +17,20 @@ LINES_PER_USE = 250
 
 os.makedirs(DB_FOLDER, exist_ok=True)
 
-# LOAD SAVE
+# LOGO
+LOGO = (
+"```\n"
+"╔══════════════════════════════╗\n"
+"║     Z E I J I E   B O T      ║\n"
+"║   PREMIUM FILE SYSTEM ⚡     ║\n"
+"╚══════════════════════════════╝\n"
+"```"
+)
+
+# DATA
 def load():
     if not os.path.exists(DATA_FILE):
-        return {"admins": [], "keys": {}, "redeemed": {}}
+        return {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
     with open(DATA_FILE) as f:
         return json.load(f)
 
@@ -28,7 +38,6 @@ def save(d):
     with open(DATA_FILE, "w") as f:
         json.dump(d, f, indent=2)
 
-# PERMISSIONS
 def is_admin(uid, d):
     return str(uid) in d["admins"] or uid == OWNER_ID
 
@@ -56,32 +65,39 @@ def premium_text(game, sent, total):
         "🔮 ✨ *PREMIUM FILE GENERATED SUCCESSFULLY!* ✨ 🔮\n\n"
         f"📊 *GENERATION SUMMARY*\n"
         f"┣ 🎮 {game.upper()}\n"
-        f"┣ 📜 Lines Generated: {sent}\n"
+        f"┣ 📜 {sent} lines\n"
         f"┣ 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"┣ 💾 Database Status: {total:,} lines available\n\n"
-        "🛡️ *SECURITY*\n"
+        f"┣ 💾 {total:,} lines available\n\n"
+        "🛡️ SECURITY\n"
         "┣ 🔒 Auto-Expiry: 5 minutes\n"
-        "┣ 🗑️ Auto-Deletion: Enabled\n\n"
-        "⭐ *Thank you for choosing Premium!*"
+        "┣ 🗑️ Auto-Delete Enabled\n\n"
+        "⭐ Thank you for choosing ZEIJIE!"
     )
 
-# KEYBOARDS
-def main_kb(uid, d):
+# KEYBOARDS (FROM FIRST BOT STYLE)
+def kb_main(uid, d):
     rows = []
 
     if is_admin(uid, d):
         rows.append([InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")])
 
     rows += [
-        [InlineKeyboardButton("📂 Database", callback_data="db")],
-        [InlineKeyboardButton("👤 Status", callback_data="status")]
+        [
+            InlineKeyboardButton("📂 Database", callback_data="db"),
+            InlineKeyboardButton("🔑 Redeem", callback_data="redeem_info")
+        ],
+        [
+            InlineKeyboardButton("👤 Status", callback_data="status"),
+            InlineKeyboardButton("📋 Commands", callback_data="commands")
+        ]
     ]
 
     return InlineKeyboardMarkup(rows)
 
-def admin_kb():
+def kb_admin():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔑 Create Key", callback_data="adm_create")],
+        [InlineKeyboardButton("📊 Stats", callback_data="adm_stats")],
         [InlineKeyboardButton("🔙 Back", callback_data="home")]
     ])
 
@@ -93,9 +109,9 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     status = "✅ Active" if has_access(uid, d) else "🔒 No Access"
 
     await update.message.reply_text(
-        f"👋 *Welcome {update.effective_user.first_name}*\n🔐 {status}",
+        f"{LOGO}\n👋 *{update.effective_user.first_name}*\n🔐 {status}",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_kb(uid, d)
+        reply_markup=kb_main(uid, d)
     )
 
 # CALLBACK
@@ -107,11 +123,28 @@ async def cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
 
     if q.data == "home":
-        await q.edit_message_text("🏠 Main Menu", reply_markup=main_kb(uid, d))
+        await q.edit_message_text(
+            f"{LOGO}\n🏠 Main Menu",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_main(uid, d)
+        )
+
+    elif q.data == "commands":
+        await q.edit_message_text(
+            "📋 COMMANDS\n\n"
+            "/start\n/redeem <key>\n/status\n/createkeys (admin)",
+            reply_markup=kb_main(uid, d)
+        )
+
+    elif q.data == "redeem_info":
+        await q.edit_message_text(
+            "🔑 Use:\n/redeem ZEIJIE-XXXX",
+            reply_markup=kb_main(uid, d)
+        )
 
     elif q.data == "admin":
         if not is_admin(uid, d): return
-        await q.edit_message_text("⚡ ADMIN PANEL", reply_markup=admin_kb())
+        await q.edit_message_text("⚡ ADMIN PANEL", reply_markup=kb_admin())
 
     elif q.data == "status":
         rd = d["redeemed"].get(str(uid))
@@ -124,12 +157,12 @@ async def cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(
                 f"👤 STATUS\n\n"
                 f"🔑 {key}\n"
-                f"📱 {used}/{max_dev} devices\n"
+                f"📱 {used}/{max_dev}\n"
                 f"⏳ {remaining_time(rd.get('expires'))}",
-                reply_markup=main_kb(uid, d)
+                reply_markup=kb_main(uid, d)
             )
         else:
-            await q.edit_message_text("🔒 No active key", reply_markup=main_kb(uid, d))
+            await q.edit_message_text("🔒 No active key", reply_markup=kb_main(uid, d))
 
     elif q.data == "db":
         if not has_access(uid, d):
@@ -207,7 +240,7 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     save(d)
 
     await update.message.reply_text(
-        f"🔑 {key}\n📱 {devices} devices\n⏳ {duration}"
+        f"🔑 {key}\n📱 {devices}\n⏳ {duration}"
     )
 
 # REDEEM
