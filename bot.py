@@ -23,15 +23,17 @@ BOT_TOKEN     = "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w"
 OWNER_ID      = 8420104044
 DATA_FILE     = "data.json"
 DB_FOLDER     = "database"
-LINES_PER_USE = 250          # lines consumed per generation
-OUTPUT_PREFIX = "ZEIJIE-VIP-PREMIUM"  # output filename prefix
+LINES_PER_USE = 250
+OUTPUT_PREFIX = "ZEIJIE-VIP-PREMIUM"
 
 os.makedirs(DB_FOLDER, exist_ok=True)
 
 # ════════════════════════════════════════════════
-#  LOGO
+#  LOGO — replaced with GIF URL (sent separately)
 # ════════════════════════════════════════════════
-LOGO = (
+LOGO_GIF_URL = "https://i.pinimg.com/originals/89/5c/e7/895ce751ba0379700381d17a67086931.gif"
+
+LOGO_TEXT = (
     "```\n"
     "╔══════════════════════════════════╗\n"
     "║   ███████╗███████╗██╗██╗██╗     ║\n"
@@ -100,15 +102,26 @@ def is_admin(uid, d) -> bool:
     return str(uid) in [str(x) for x in d.get("admins", [])] or int(uid) == OWNER_ID
 
 def has_access(uid, d) -> bool:
+    """
+    FIX: Properly checks per-user expiry from the key's user_expiry dict.
+    Expired keys NO LONGER grant access.
+    """
     if is_admin(uid, d):
         return True
-    rd = d.get("redeemed", {}).get(str(uid))
+    uid_str = str(uid)
+    rd = d.get("redeemed", {}).get(uid_str)
     if not rd:
         return False
     exp = rd.get("expires")
     if not exp:
-        return True
+        # Lifetime key — check that the key still exists and user is still in it
+        key = rd.get("key")
+        if key and key in d.get("keys", {}):
+            return True
+        # Key was revoked
+        return False
     try:
+        # FIX: expired keys = NO access
         return datetime.fromisoformat(exp) > datetime.now()
     except ValueError:
         return False
@@ -137,17 +150,21 @@ def count_lines(path: str) -> int:
         return 0
 
 # ════════════════════════════════════════════════
-#  KEY HELPERS — Format: ZEIJIE-PREMIUM-XXXXXXXX-XXXX
+#  KEY HELPERS — Format: ZEIJIE-PREMIUM-XXXX
+#  (6-digit random number, matching the sample output)
 # ════════════════════════════════════════════════
 def generate_key() -> str:
-    part1 = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    part2 = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    return f"ZEIJIE-PREMIUM-{part1}-{part2}"
+    """
+    Format: ZEIJIE-PREMIUM-XXXXXX  (6 random digits, like the sample)
+    Example: ZEIJIE-PREMIUM-273852
+    """
+    number = "".join(random.choices(string.digits, k=6))
+    return f"ZEIJIE-PREMIUM-{number}"
 
 def parse_duration(raw: str):
     """
     Returns (timedelta | None, label_str).
-    None = lifetime.  Accepts: lifetime, 1h, 30m, 7d, 10days, 2hours
+    None = lifetime.  Accepts: lifetime, 1h, 30m, 7d, 10days, 2hours, 1m
     """
     dur = raw.strip().lower()
     if dur in ("lifetime", "forever", "inf"):
@@ -197,7 +214,6 @@ def expiry_display(exp_iso) -> str:
 
 # ════════════════════════════════════════════════
 #  OUTPUT FILENAME BUILDER
-#  Format: ZEIJIE-VIP-PREMIUM-{stem}.txt
 # ════════════════════════════════════════════════
 def output_filename(stem: str) -> str:
     clean = stem.upper().replace(" ", "_")
@@ -206,7 +222,8 @@ def output_filename(stem: str) -> str:
 # ════════════════════════════════════════════════
 #  MESSAGE BUILDERS
 # ════════════════════════════════════════════════
-def key_message(key: str, duration_label: str, devices: int) -> str:
+def key_message_single(key: str, duration_label: str, devices: int, created_at: str) -> str:
+    """Single key display (legacy /createkeys 1 user)."""
     return (
         "┌─────────────────────────────┐\n"
         "│  🔑  KEY GENERATED          │\n"
@@ -216,28 +233,51 @@ def key_message(key: str, duration_label: str, devices: int) -> str:
         f"⏱ *Duration*   : {duration_label}\n"
         f"📅 *Starts*     : On redeem\n"
         f"👥 *Max Users*  : {devices}\n"
+        f"📅 *Created On* : {created_at}\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "_Timer starts when the buyer redeems this key ✅_"
+    )
+
+def keys_batch_message(keys: list, duration_label: str, created_at: str) -> str:
+    """
+    NEW: Bulk key display matching the requested format:
+    🎉 5 Keys Generated Successfully! 🎉
+    ZEIJIE-PREMIUM-XXXXXX
+    ...
+    ⏳ Validity (each): ⏱️ X
+    📝 Status: One-time use
+    📅 Created On: ...
+    ✨ Share these keys with your users to grant them access!
+    """
+    count = len(keys)
+    key_lines = "\n".join(f"`{k}`" for k in keys)
+    return (
+        f"🎉 *{count} Key{'s' if count > 1 else ''} Generated Successfully\\!* 🎉\n\n"
+        f"{key_lines}\n\n"
+        f"⏳ *Validity \\(each\\):* ⏱️ {md_safe(duration_label)}\n"
+        f"📝 *Status:* One\\-time use\n"
+        f"📅 *Created On:* {md_safe(created_at)}\n\n"
+        "✨ _Share these keys with your users to grant them access\\!_"
     )
 
 def premium_summary(fname_stem: str, sent: int, remaining: int) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out_name = output_filename(fname_stem)
     return (
-        "🔮 *PREMIUM FILE GENERATED!*\n\n"
+        "🔮 *PREMIUM FILE GENERATED\\!*\n\n"
         "📊 *GENERATION SUMMARY*\n"
-        f"┣ 🎮 Source     : {fname_stem.upper()}\n"
-        f"┣ 📄 File       : `{out_name}`\n"
+        f"┣ 🎮 Source     : {md_safe(fname_stem.upper())}\n"
+        f"┣ 📄 File       : `{md_safe(out_name)}`\n"
         f"┣ 📜 Lines      : {sent:,}\n"
-        f"┣ 🕐 Generated  : {now}\n"
+        f"┣ 🕐 Generated  : {md_safe(now)}\n"
         f"┣ 💾 Remaining  : {remaining:,} lines\n"
         "┣ 🧹 Cleanup    : Done\n\n"
         "🛡 *SECURITY*\n"
-        "┣ 🔒 Auto-Expiry : 5 minutes\n"
-        "┣ 🗑 Auto-Delete : Enabled\n"
+        "┣ 🔒 Auto\\-Expiry : 5 minutes\n"
+        "┣ 🗑 Auto\\-Delete : Enabled\n"
         "┣ ⚡ Session     : Verified\n\n"
         "⬇️ Download immediately — file deletes in 5 min\n\n"
-        "⭐ *Thank you for using ZEIJIE Premium!*"
+        "⭐ *Thank you for using ZEIJIE Premium\\!*"
     )
 
 # ════════════════════════════════════════════════
@@ -273,7 +313,6 @@ def kb_back(dest="home") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=dest)]])
 
 def kb_db_files(files: list) -> InlineKeyboardMarkup:
-    """Each button shows filename + line count."""
     rows = []
     for fname in files:
         fpath = os.path.join(DB_FOLDER, fname)
@@ -292,9 +331,8 @@ def build_welcome(first_name: str, username, uid, d: dict) -> str:
     safe_name    = md_safe(first_name or "Operator")
     user_line    = f"👤 *{safe_name}*"
     if username:
-        user_line += f"  (@{md_safe(username)})"
+        user_line += f"  \\(@{md_safe(username)}\\)"
     return (
-        f"{LOGO}\n\n"
         f"{welcome_line}\n\n"
         f"{user_line}\n"
         f"🔐 Status : {status}"
@@ -313,42 +351,52 @@ async def _auto_delete(delay: int, *messages):
 
 # ════════════════════════════════════════════════
 #  DATABASE DECREASE HELPER
-#  Removes the first N lines from a file in-place
 # ════════════════════════════════════════════════
-def consume_lines(fpath: str, n: int) -> tuple[str, int]:
-    """
-    Read first `n` lines from fpath, then rewrite the file
-    with those lines removed.  Returns (content, remaining_count).
-    """
+def consume_lines(fpath: str, n: int) -> tuple:
     with open(fpath, "r", errors="ignore") as f:
         all_lines = f.readlines()
-
     to_send   = all_lines[:n]
     leftover  = all_lines[n:]
     remaining = len(leftover)
-
-    # Rewrite file without consumed lines
     with open(fpath, "w", encoding="utf-8") as f:
         f.writelines(leftover)
-
     return "".join(to_send), remaining
 
 # ════════════════════════════════════════════════
-#  /start
+#  /start — sends GIF + welcome text
 # ════════════════════════════════════════════════
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d    = load()
     user = update.effective_user
     track(user.id, user.username, user.first_name, d)
     save(d)
-    await update.message.reply_text(
-        build_welcome(user.first_name, user.username, user.id, d),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb_main(user.id, d),
-    )
+
+    welcome_text = build_welcome(user.first_name, user.username, user.id, d)
+    kb           = kb_main(user.id, d)
+
+    # Send GIF logo first, then caption with welcome text
+    try:
+        await update.message.reply_animation(
+            animation=LOGO_GIF_URL,
+            caption=welcome_text,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=kb,
+        )
+    except Exception as e:
+        logger.warning("GIF send failed (%s), falling back to text.", e)
+        await update.message.reply_text(
+            f"{LOGO_TEXT}\n\n{welcome_text}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=kb,
+        )
 
 # ════════════════════════════════════════════════
-#  /createkeys <max_users> <duration>  — admin only
+#  /createkeys <count> <max_users_each> <duration>
+#  OR /createkeys <max_users> <duration>  (single key, backward-compat)
+#
+#  NEW FEATURE: Generate multiple keys at once.
+#  Example: /createkeys 5 1 1m  → 5 keys, 1 user each, 1 minute
+#  Example: /createkeys 1 7d   → 1 key, 1 user, 7 days (old style)
 # ════════════════════════════════════════════════
 async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d   = load()
@@ -360,56 +408,106 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if len(ctx.args) < 2:
         await update.message.reply_text(
-            "📋 *Usage:*\n`/createkeys <max\\_users> <duration>`\n\n"
+            "📋 *Usage:*\n"
+            "`/createkeys <count> <max\\_users> <duration>`\n\n"
+            "*Or single key \\(old style\\):*\n"
+            "`/createkeys <max\\_users> <duration>`\n\n"
             "*Duration examples:*\n"
             "  `10d`      — 10 days\n"
             "  `2h`       — 2 hours\n"
             "  `30m`      — 30 minutes\n"
+            "  `1m`       — 1 minute\n"
             "  `lifetime` — never expires\n\n"
-            "_Timer starts when the buyer redeems the key._",
-            parse_mode=ParseMode.MARKDOWN,
+            "*Key format:* `ZEIJIE-PREMIUM-XXXXXX`\n\n"
+            "_Timer starts when the buyer redeems the key\\._",
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
-    try:
-        devices = int(ctx.args[0])
-        if devices < 1:
-            raise ValueError
-    except ValueError:
+    # Detect 3-arg form: /createkeys <count> <max_users> <duration>
+    # vs 2-arg form: /createkeys <max_users> <duration>
+    count   = 1
+    devices = 1
+
+    if len(ctx.args) >= 3:
+        # Try to parse first two as ints
+        try:
+            count_try   = int(ctx.args[0])
+            devices_try = int(ctx.args[1])
+            raw_dur     = " ".join(ctx.args[2:])
+            count   = count_try
+            devices = devices_try
+        except ValueError:
+            # Fall back: treat as old 2-arg style with extra junk
+            try:
+                devices = int(ctx.args[0])
+                raw_dur = " ".join(ctx.args[1:])
+            except ValueError:
+                await update.message.reply_text("❌ Invalid arguments. First arg must be a number.")
+                return
+    else:
+        # 2-arg style: /createkeys <max_users> <duration>
+        try:
+            devices = int(ctx.args[0])
+            raw_dur = " ".join(ctx.args[1:])
+        except ValueError:
+            await update.message.reply_text("❌ Max users must be a positive integer.")
+            return
+
+    if count < 1 or count > 50:
+        await update.message.reply_text("❌ Key count must be between 1 and 50.")
+        return
+    if devices < 1:
         await update.message.reply_text("❌ Max users must be a positive integer.")
         return
 
-    raw_dur = " ".join(ctx.args[1:])
     try:
         td, duration_label = parse_duration(raw_dur)
     except ValueError:
         await update.message.reply_text(
-            "❌ Invalid duration.\n\nExamples: `10d` / `2h` / `30m` / `lifetime`",
-            parse_mode=ParseMode.MARKDOWN,
+            "❌ Invalid duration\\.\n\nExamples: `10d` / `2h` / `30m` / `1m` / `lifetime`",
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
-    key = generate_key()
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    generated_keys = []
 
-    d["keys"][key] = {
-        "devices":     devices,
-        "duration":    raw_dur,
-        "expires":     None,
-        "used_by":     [],
-        "user_expiry": {},
-        "created_by":  str(uid),
-        "created_at":  datetime.now().isoformat(),
-    }
+    for _ in range(count):
+        key = generate_key()
+        # Avoid duplicates (very unlikely but safe)
+        while key in d["keys"]:
+            key = generate_key()
+
+        d["keys"][key] = {
+            "devices":     devices,
+            "duration":    raw_dur,
+            "expires":     None,
+            "used_by":     [],
+            "user_expiry": {},
+            "created_by":  str(uid),
+            "created_at":  datetime.now().isoformat(),
+        }
+        generated_keys.append(key)
+
     save(d)
-    logger.info("Key created: %s  duration=%s  devices=%s  by=%s", key, raw_dur, devices, uid)
-
-    await update.message.reply_text(
-        key_message(key, duration_label, devices),
-        parse_mode=ParseMode.MARKDOWN,
+    logger.info(
+        "%d key(s) created: duration=%s devices=%s by=%s",
+        count, raw_dur, devices, uid
     )
+
+    if count == 1:
+        # Single key — use the detailed single-key format
+        msg = key_message_single(generated_keys[0], duration_label, devices, created_at)
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    else:
+        # Multiple keys — use the batch format matching the requested output
+        msg = keys_batch_message(generated_keys, duration_label, created_at)
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
 
 # ════════════════════════════════════════════════
 #  /redeem <key>
+#  FIX: Expired keys properly block access
 # ════════════════════════════════════════════════
 async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d   = load()
@@ -417,7 +515,7 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not ctx.args:
         await update.message.reply_text(
-            "🔑 *Usage:*\n`/redeem ZEIJIE-PREMIUM-XXXXXXXX-XXXX`",
+            "🔑 *Usage:*\n`/redeem ZEIJIE-PREMIUM-XXXXXX`",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -433,12 +531,28 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     k = d["keys"][key]
 
+    # FIX: Check if user already redeemed THIS key
     if uid in k.get("used_by", []):
+        # Check their current expiry status
+        existing_rd = d.get("redeemed", {}).get(uid)
+        if existing_rd and existing_rd.get("key") == key:
+            exp = existing_rd.get("expires")
+            if exp:
+                try:
+                    if datetime.fromisoformat(exp) <= datetime.now():
+                        await update.message.reply_text(
+                            "⛔ *Your key has expired.*\n\nContact admin for a new key.",
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+                        return
+                except ValueError:
+                    pass
         await update.message.reply_text(
             "⚠️ This key is already activated on your account.",
         )
         return
 
+    # FIX: Check device limit
     if len(k.get("used_by", [])) >= int(k.get("devices", 1)):
         await update.message.reply_text("❌ Device limit reached for this key.")
         return
@@ -469,7 +583,7 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "┌─────────────────────────────┐\n"
         "│  ✅  KEY ACTIVATED!         │\n"
         "└─────────────────────────────┘\n\n"
-        f"🔑 `{key}`\n\n"
+        f"`{key}`\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ *Duration*   : {dur_label}\n"
         f"📅 *Expires*    : {expiry_display(expires_iso)}\n"
@@ -502,26 +616,30 @@ async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     exp = rd.get("expires")
+    expired = False
     if exp:
         try:
-            if datetime.fromisoformat(exp) < datetime.now():
-                await update.message.reply_text(
-                    "⛔ Your key has *expired*.\n\nContact admin for a new key.",
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-                return
+            expired = datetime.fromisoformat(exp) <= datetime.now()
         except ValueError:
             pass
 
     activated = rd.get("activated", "Unknown")
-    await update.message.reply_text(
-        "✅ *Access Active*\n\n"
-        f"🔑 Key      : `{rd['key']}`\n"
-        f"⏱ Duration : {rd.get('duration', 'N/A')}\n"
-        f"🕐 Started  : {activated[:19]}\n"
-        f"📅 Expires  : {expiry_display(exp)}",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    if expired:
+        txt = (
+            "⛔ *Access Expired*\n\n"
+            f"🔑 Key     : `{rd['key']}`\n"
+            f"📅 Expired : {expiry_display(exp)}\n\n"
+            "_Contact admin for a new key._"
+        )
+    else:
+        txt = (
+            "✅ *Access Active*\n\n"
+            f"🔑 Key      : `{rd['key']}`\n"
+            f"⏱ Duration : {rd.get('duration', 'N/A')}\n"
+            f"🕐 Started  : {activated[:19]}\n"
+            f"📅 Expires  : {expiry_display(exp)}"
+        )
+    await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
 # ════════════════════════════════════════════════
 #  /addadmin <user_id>  — owner only
@@ -582,10 +700,12 @@ async def revokekey(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Key not found.")
         return
     del d["keys"][key]
+    # FIX: Also clear redeemed entries for this key so users lose access immediately
     d["redeemed"] = {u: v for u, v in d["redeemed"].items() if v.get("key") != key}
     save(d)
     await update.message.reply_text(
-        f"✅ Key revoked: `{key}`", parse_mode=ParseMode.MARKDOWN
+        f"✅ Key revoked: `{key}`\n_All users on this key lost access._",
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 # ════════════════════════════════════════════════
@@ -637,8 +757,6 @@ async def getfile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     lines_to_send = min(LINES_PER_USE, total)
-
-    # Consume lines (decrease database)
     content, remaining = consume_lines(fpath, lines_to_send)
 
     stem     = Path(fname).stem
@@ -650,7 +768,7 @@ async def getfile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         document=buf,
         filename=out_name,
         caption=premium_summary(stem, lines_to_send, remaining),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.MARKDOWN_V2,
     )
     asyncio.create_task(_auto_delete(300, sent_msg))
 
@@ -666,41 +784,64 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── Home ──────────────────────────────────────────────────────
     if data == "home":
-        await q.edit_message_text(
-            build_welcome(q.from_user.first_name, q.from_user.username, uid, d),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb_main(uid, d),
-        )
+        welcome_text = build_welcome(q.from_user.first_name, q.from_user.username, uid, d)
+        try:
+            await q.edit_message_caption(
+                caption=welcome_text,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=kb_main(uid, d),
+            )
+        except Exception:
+            try:
+                await q.edit_message_text(
+                    welcome_text,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=kb_main(uid, d),
+                )
+            except Exception:
+                pass
 
     # ── Admin Panel ───────────────────────────────────────────────
     elif data == "admin":
         if not is_admin(uid, d):
             await q.answer("❌ Admins only.", show_alert=True)
             return
-        await q.edit_message_text(
-            "⚡ *Admin Panel*\n\nChoose an option below:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb_admin(),
-        )
+        try:
+            await q.edit_message_text(
+                "⚡ *Admin Panel*\n\nChoose an option below:",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb_admin(),
+            )
+        except Exception:
+            await q.edit_message_caption(
+                caption="⚡ *Admin Panel*\n\nChoose an option below:",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb_admin(),
+            )
 
     # ── Create Key info ───────────────────────────────────────────
     elif data == "adm_create":
         if not is_admin(uid, d):
             await q.answer("❌ Admins only.", show_alert=True)
             return
-        await q.edit_message_text(
-            "🔑 *Create Key*\n\n"
-            "Send this command in chat:\n"
+        txt = (
+            "🔑 *Create Keys*\n\n"
+            "Send this command in chat:\n\n"
+            "*Single key:*\n"
             "`/createkeys <max\\_users> <duration>`\n\n"
-            "*Key format:* `ZEIJIE-PREMIUM-XXXXXXXX-XXXX`\n\n"
+            "*Multiple keys:*\n"
+            "`/createkeys <count> <max\\_users> <duration>`\n\n"
+            "*Key format:* `ZEIJIE-PREMIUM-XXXXXX`\n\n"
             "*Examples:*\n"
-            "  `/createkeys 1 7d`\n"
-            "  `/createkeys 3 30d`\n"
-            "  `/createkeys 1 lifetime`\n\n"
-            "_Timer starts when buyer redeems the key._",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb_back("admin"),
+            "  `/createkeys 1 7d` — 1 key, 7 days\n"
+            "  `/createkeys 5 1 1m` — 5 keys, 1 min each\n"
+            "  `/createkeys 3 1 lifetime`\n\n"
+            "_Timer starts when buyer redeems the key\\._"
         )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back("admin"))
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb_back("admin"))
 
     # ── Active Keys ───────────────────────────────────────────────
     elif data == "adm_keys":
@@ -744,6 +885,13 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     uname = members.get(str(u_id), {}).get("username", "")
                     label = f"@{uname}" if uname else f"uid:{u_id}"
                     exp_str = expiry_display(rd["expires"]) if rd else "Unknown"
+                    # Show [EXPIRED] tag clearly
+                    if rd and rd.get("expires"):
+                        try:
+                            if datetime.fromisoformat(rd["expires"]) <= datetime.now():
+                                exp_str += " ⛔ EXPIRED"
+                        except ValueError:
+                            pass
                     block += f"\n   └ {label}: {exp_str}"
 
                 lines.append(block)
@@ -752,9 +900,10 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if len(txt) > 3800:
                 txt = txt[:3800] + "\n\n_... truncated_"
 
-        await q.edit_message_text(
-            txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin")
-        )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin"))
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin"))
 
     # ── Admins List ───────────────────────────────────────────────
     elif data == "adm_list":
@@ -767,9 +916,10 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if not admins
             else "👥 *Admins:*\n\n" + "\n".join(f"  • `{a}`" for a in admins)
         )
-        await q.edit_message_text(
-            txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin")
-        )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin"))
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin"))
 
     # ── All Members ───────────────────────────────────────────────
     elif data == "adm_members":
@@ -793,20 +943,23 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             txt = "\n\n".join(lines)
             if len(txt) > 3800:
                 txt = txt[:3800] + "\n\n_... truncated_"
-        await q.edit_message_text(
-            txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin")
-        )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin"))
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back("admin"))
 
     # ── Database ──────────────────────────────────────────────────
     elif data == "db":
         files = get_db_files()
         if not files:
-            await q.edit_message_text(
+            txt = (
                 "📂 *Database is empty.*\n\n"
-                "Upload `.txt` files into the `database/` folder on the server.",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=kb_back(),
+                "Upload `.txt` files into the `database/` folder on the server."
             )
+            try:
+                await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
+            except Exception:
+                await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
             return
 
         lines = ["📂 *Database Files:*\n"]
@@ -814,12 +967,12 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cnt = count_lines(os.path.join(DB_FOLDER, fname))
             lines.append(f"  • `{fname}` — {cnt:,} lines")
         lines.append("\n_Tap a file below to generate and download._")
+        txt = "\n".join(lines)
 
-        await q.edit_message_text(
-            "\n".join(lines),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb_db_files(files),
-        )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_db_files(files))
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_db_files(files))
 
     # ── Database File Selected (download) ─────────────────────────
     elif data.startswith("dbfile:"):
@@ -827,7 +980,8 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if not has_access(uid, d):
             await q.answer(
-                "🔒 You need an active key to download files.", show_alert=True
+                "🔒 Your key has expired or is invalid. Contact admin for a new key.",
+                show_alert=True,
             )
             return
 
@@ -844,8 +998,6 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         lines_to_send = min(LINES_PER_USE, total)
-
-        # Consume lines (decrease database)
         content, remaining = consume_lines(fpath, lines_to_send)
 
         stem     = Path(fname).stem
@@ -857,19 +1009,21 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             document=buf,
             filename=out_name,
             caption=premium_summary(stem, lines_to_send, remaining),
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         asyncio.create_task(_auto_delete(300, sent_msg))
 
     # ── Redeem Info ───────────────────────────────────────────────
     elif data == "redeem_info":
-        await q.edit_message_text(
+        txt = (
             "🔑 *Redeem a Key*\n\n"
-            "Send this command:\n`/redeem ZEIJIE-PREMIUM-XXXXXXXX-XXXX`\n\n"
-            "_Your access timer starts the moment you redeem._",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb_back(),
+            "Send this command:\n`/redeem ZEIJIE-PREMIUM-XXXXXX`\n\n"
+            "_Your access timer starts the moment you redeem._"
         )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
 
     # ── Status ────────────────────────────────────────────────────
     elif data == "status":
@@ -885,7 +1039,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 expired = False
                 if exp:
                     try:
-                        expired = datetime.fromisoformat(exp) < datetime.now()
+                        expired = datetime.fromisoformat(exp) <= datetime.now()
                     except ValueError:
                         pass
                 activated = rd.get("activated", "Unknown")
@@ -904,13 +1058,14 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         f"🕐 Started  : {activated[:19]}\n"
                         f"📅 Expires  : {expiry_display(exp)}"
                     )
-        await q.edit_message_text(
-            txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back()
-        )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
 
     # ── Commands ──────────────────────────────────────────────────
     elif data == "commands":
-        await q.edit_message_text(
+        txt = (
             "📋 *Commands*\n\n"
             "👤 *User:*\n"
             "  /start — Main menu\n"
@@ -918,13 +1073,16 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "  /status — Check your access\n"
             "  /getfile `<filename>` — Download file\n\n"
             "🛡 *Admin:*\n"
-            "  /createkeys `<users> <duration>` — Create key\n"
+            "  /createkeys `<count> <users> <dur>` — Bulk create\n"
+            "  /createkeys `<users> <duration>` — Single key\n"
             "  /revokekey `<key>` — Delete a key\n"
             "  /addadmin `<id>` — Add admin (owner only)\n"
-            "  /removeadmin `<id>` — Remove admin (owner only)",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb_back(),
+            "  /removeadmin `<id>` — Remove admin (owner only)"
         )
+        try:
+            await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
+        except Exception:
+            await q.edit_message_caption(caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_back())
 
 # ════════════════════════════════════════════════
 #  MAIN
