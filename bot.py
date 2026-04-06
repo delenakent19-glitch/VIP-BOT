@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-import os, json, random, string, io, asyncio
+import os, json, random, string
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.constants import ParseMode
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, ContextTypes, filters
+)
 
 BOT_TOKEN = "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w"
 OWNER_ID = 8420104044
@@ -17,343 +18,223 @@ LINES_PER_USE = 250
 
 os.makedirs(DB_FOLDER, exist_ok=True)
 
-# ═══════════════════════════════
-# LOGO
-# ═══════════════════════════════
-LOGO = (
-"```\n"
-"╔══════════════════════════════════╗\n"
-"║   ███████╗███████╗██╗██╗██╗     ║\n"
-"║   ╚══███╔╝██╔════╝██║██║██║     ║\n"
-"║     ███╔╝ █████╗  ██║██║██║     ║\n"
-"║    ███╔╝  ██╔══╝  ██║██║██║     ║\n"
-"║   ███████╗███████╗██║██║███████╗║\n"
-"║   ╚══════╝╚══════╝╚═╝╚═╝╚══════╝║\n"
-"║        Z E I J I E   B O T      ║\n"
-"╚══════════════════════════════════╝\n"
-"```"
-)
+# ================== LOGO ==================
+LOGO = """
+╔══════════════════════╗
+║    Z E I J I E  B O T    ║
+╚══════════════════════╝
+"""
 
-# ═══════════════════════════════
-# DATA
-# ═══════════════════════════════
-def load():
+# ================== LOAD/SAVE ==================
+def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
-    with open(DATA_FILE) as f:
+        return {"keys": {}, "users": {}}
+    with open(DATA_FILE, "r") as f:
         return json.load(f)
 
-def save(d):
+def save_data(data):
     with open(DATA_FILE, "w") as f:
-        json.dump(d, f, indent=2)
+        json.dump(data, f, indent=4)
 
-def is_admin(uid, d):
-    return str(uid) in d.get("admins", []) or uid == OWNER_ID
+data = load_data()
 
-def has_access(uid, d):
-    if is_admin(uid, d):
-        return True
+# ================== DATABASE ==================
+def count_lines(filename):
+    path = os.path.join(DB_FOLDER, filename)
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r") as f:
+        return len(f.readlines())
 
-    rd = d.get("redeemed", {}).get(str(uid))
-    if not rd:
-        return False
+def get_lines(filename, count):
+    path = os.path.join(DB_FOLDER, filename)
 
-    exp = rd.get("expires")
-    if exp and datetime.fromisoformat(exp) < datetime.now():
-        return False
+    if not os.path.exists(path):
+        return []
 
-    return True
+    with open(path, "r") as f:
+        lines = f.readlines()
 
-def track(uid, user, d):
-    d.setdefault("members", {})[str(uid)] = {
-        "username": user.username or "",
-        "first_name": user.first_name or "",
-        "joined": datetime.now().isoformat()
-    }
+    if len(lines) < count:
+        return []
 
-def get_files():
-    return sorted(os.listdir(DB_FOLDER))
+    selected = lines[:count]
+    remaining = lines[count:]
 
-# ═══════════════════════════════
-# PREMIUM TEXT
-# ═══════════════════════════════
-def premium_text(game, sent, total):
-    return (
-        "🔮 ✨ PREMIUM FILE GENERATED SUCCESSFULLY! ✨ 🔮\n\n"
-        f"┣ 🎮 {game.upper()}\n"
-        f"┣ 📜 Lines Generated: {sent}\n"
-        f"┣ 💾 Database: {total:,}\n"
-        f"┣ 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        "🔒 Auto-delete in 5 minutes"
-    )
+    # AUTO DECREASE
+    with open(path, "w") as f:
+        f.writelines(remaining)
 
-# ═══════════════════════════════
-# KEYBOARDS
-# ═══════════════════════════════
-def kb_main(uid, d):
-    rows = []
+    return selected
 
-    if is_admin(uid, d):
-        rows.append([InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")])
+# ================== KEY SYSTEM ==================
+def generate_key():
+    return "ZEIJIE-PREMIUM-" + str(random.randint(10000000, 99999999)) + "-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-    rows += [
-        [
-            InlineKeyboardButton("📂 Database", callback_data="db"),
-            InlineKeyboardButton("🔑 Redeem", callback_data="redeem_info")
-        ],
-        [
-            InlineKeyboardButton("👤 Status", callback_data="status"),
-            InlineKeyboardButton("📋 Commands", callback_data="commands")
-        ]
+def parse_time(t):
+    t = t.lower()
+    if "m" in t:
+        return timedelta(minutes=int(t.replace("m","")))
+    if "h" in t:
+        return timedelta(hours=int(t.replace("h","")))
+    if "d" in t:
+        return timedelta(days=int(t.replace("d","")))
+    return timedelta(days=1)
+
+# ================== START ==================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")],
+        [InlineKeyboardButton("📂 Database", callback_data="database")],
+        [InlineKeyboardButton("👤 Status", callback_data="status")]
     ]
 
-    return InlineKeyboardMarkup(rows)
-
-def kb_admin():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔑 Create Key", callback_data="adm_create")],
-        [InlineKeyboardButton("🔙 Back", callback_data="home")]
-    ])
-
-# ═══════════════════════════════
-# START
-# ═══════════════════════════════
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
-    user = update.effective_user
-
-    track(user.id, user, d)
-    save(d)
-
-    status = "✅ Active" if has_access(user.id, d) else "🔒 No Access"
-
-    await update.message.reply_text(
-        f"{LOGO}\n👋 {user.first_name}\n🔐 {status}",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb_main(user.id, d)
-    )
-
-# ═══════════════════════════════
-# CALLBACK
-# ═══════════════════════════════
-async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    d = load()
-    uid = q.from_user.id
-
-    if q.data == "home":
-        await q.edit_message_text(LOGO, parse_mode=ParseMode.MARKDOWN, reply_markup=kb_main(uid, d))
-
-    elif q.data == "admin":
-        if not is_admin(uid, d):
-            return
-        await q.edit_message_text("⚡ ADMIN PANEL", reply_markup=kb_admin())
-
-    elif q.data == "commands":
-        await q.edit_message_text(
-            "📋 COMMANDS\n\n/start\n/redeem <key>\n/createkeys",
-            reply_markup=kb_main(uid, d)
+    if update.message:
+        await update.message.reply_text(
+            f"{LOGO}\n\nWelcome!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-
-    elif q.data == "redeem_info":
-        await q.edit_message_text("Use:\n/redeem ZEIJIE-PREMIUM-XXXX", reply_markup=kb_main(uid, d))
-
-    elif q.data == "status":
-        rd = d["redeemed"].get(str(uid))
-        if not rd:
-            await q.edit_message_text("🔒 No active key")
-            return
-
-        exp = rd.get("expires")
-        txt = "♾️ Lifetime" if not exp else datetime.fromisoformat(exp).strftime("%Y-%m-%d %H:%M:%S")
-
-        await q.edit_message_text(f"🔑 {rd['key']}\n📅 {txt}", reply_markup=kb_main(uid, d))
-
-    elif q.data == "db":
-        if not has_access(uid, d):
-            await q.edit_message_text("🔒 Access required")
-            return
-
-        files = get_files()
-        rows = []
-
-        for i, f in enumerate(files):
-            path = os.path.join(DB_FOLDER, f)
-            count = sum(1 for _ in open(path, errors="ignore"))
-
-            rows.append([InlineKeyboardButton(f"{Path(f).stem.upper()} ({count:,})", callback_data=f"send_{i}")])
-
-        rows.append([InlineKeyboardButton("🔙 Back", callback_data="home")])
-
-        await q.edit_message_text("📂 DATABASE", reply_markup=InlineKeyboardMarkup(rows))
-
-    elif q.data.startswith("send_"):
-        if not has_access(uid, d):
-            await q.message.reply_text("🔒 No access")
-            return
-
-        idx = int(q.data.split("_")[1])
-        files = get_files()
-
-        fname = files[idx]
-        path = os.path.join(DB_FOLDER, fname)
-
-        msg = await q.message.reply_text("🔍 Initializing 20%...")
-        await asyncio.sleep(1)
-        await msg.edit_text("⚙️ Processing 50%...")
-        await asyncio.sleep(1)
-        await msg.edit_text("📦 Extracting 80%...")
-        await asyncio.sleep(1)
-        await msg.edit_text("✅ Completed 100%")
-
-        with open(path, "r", errors="replace") as f:
-            lines = f.readlines()
-
-        chunk = lines[:LINES_PER_USE]
-
-        with open(path, "w") as f:
-            f.writelines(lines[LINES_PER_USE:])
-
-        bio = io.BytesIO("".join(chunk).encode())
-        bio.name = f"ZEIJIE-PREMIUM-{Path(fname).stem.upper()}.txt"
-
-        await q.message.reply_document(bio)
-
-        done = await q.message.reply_text(
-            premium_text(Path(fname).stem, len(chunk), len(lines)),
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-        await asyncio.sleep(300)
-        try:
-            await done.delete()
-            await msg.delete()
-        except:
-            pass
-
-# ═══════════════════════════════
-# CREATE KEY
-# ═══════════════════════════════
-async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
-
-    if not is_admin(update.effective_user.id, d):
-        return
-
-    if len(ctx.args) < 2:
-        await update.message.reply_text("Usage: /createkeys <devices> <duration>")
-        return
-
-    devices = int(ctx.args[0])
-    duration = ctx.args[1].lower()
-
-    key = "ZEIJIE-PREMIUM-" + "".join(random.choices(string.digits, k=8)) + "-" + "".join(random.choices(string.ascii_uppercase+string.digits, k=4))
-
-    now = datetime.now()
-
-    if duration == "lifetime":
-        exp_text = "♾️ Lifetime"
     else:
-        num = int("".join(filter(str.isdigit, duration)) or 0)
+        await update.callback_query.edit_message_text(
+            f"{LOGO}\n\nWelcome!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-        if "h" in duration:
-            exp = now + timedelta(hours=num)
-        elif "m" in duration:
-            exp = now + timedelta(minutes=num)
-        else:
-            exp = now + timedelta(days=num)
+# ================== BUTTON HANDLER ==================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-        exp_text = exp.strftime("%Y-%m-%d (%H:%M:%S)")
+    if query.data == "database":
+        total = count_lines("garena.txt")
+        keyboard = [
+            [InlineKeyboardButton("🎮 GARENA", callback_data="garena")],
+            [InlineKeyboardButton("🔙 Back", callback_data="back")]
+        ]
 
-    d["keys"][key] = {
+        await query.edit_message_text(
+            f"{LOGO}\n\n📂 DATABASE\n\nGARENA ({total})",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif query.data == "garena":
+        user_id = str(query.from_user.id)
+
+        if user_id not in data["users"]:
+            await query.answer("Access required", show_alert=True)
+            return
+
+        lines = get_lines("garena.txt", LINES_PER_USE)
+
+        if not lines:
+            await query.answer("Not enough lines", show_alert=True)
+            return
+
+        filename = "ZEIJIE-PREMIUM-GARENA.txt"
+
+        with open(filename, "w") as f:
+            f.writelines(lines)
+
+        remaining = count_lines("garena.txt")
+
+        await query.message.reply_document(open(filename, "rb"))
+
+        await query.message.reply_text(
+f"""✨🔮 PREMIUM FILE GENERATED SUCCESSFULLY! 🔮✨
+
+🎮 GARENA
+🪵 Lines Generated: {LINES_PER_USE}
+📁 Database: {remaining}
+⏰ {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+🔒 Auto-delete in 5 minutes"""
+        )
+
+    elif query.data == "back":
+        await start(update, context)
+
+# ================== CREATE KEYS ==================
+async def createkeys(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    try:
+        devices = int(context.args[0])
+        duration = context.args[1]
+    except:
+        await update.message.reply_text("Usage: /createkeys <devices> <time>")
+        return
+
+    key = generate_key()
+    expire = datetime.now() + parse_time(duration)
+
+    data["keys"][key] = {
         "devices": devices,
-        "duration": duration,
-        "used_by": []
+        "expire": expire.strftime("%Y-%m-%d %H:%M:%S"),
+        "used": []
     }
 
-    save(d)
+    save_data(data)
 
     await update.message.reply_text(
-        "🔑 Key Generated!\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"{key}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ Duration : {duration}\n"
-        f"📅 Expires  : {exp_text}\n"
-        f"👥 Max users: {devices}"
+f"""🔑 Key Generated!
+━━━━━━━━━━━━━━━━━━━━
+{key}
+━━━━━━━━━━━━━━━━━━━━
+⏱ Duration : {duration}
+📅 Expires  : {expire.strftime("%Y-%m-%d (%H:%M:%S)")}
+👥 Max users: {devices}"""
     )
 
-# ═══════════════════════════════
-# REDEEM
-# ═══════════════════════════════
-async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
-    uid = str(update.effective_user.id)
-
-    if not ctx.args:
-        await update.message.reply_text("Usage: /redeem <key>")
+# ================== REDEEM ==================
+async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        key = context.args[0]
+    except:
         return
 
-    key = ctx.args[0].strip().upper()
+    user_id = str(update.effective_user.id)
 
-    if key not in d["keys"]:
+    if key not in data["keys"]:
         await update.message.reply_text("❌ Invalid key")
         return
 
-    k = d["keys"][key]
+    k = data["keys"][key]
 
-    if uid in k["used_by"]:
-        await update.message.reply_text("⚠️ Already used")
+    if len(k["used"]) >= k["devices"]:
+        await update.message.reply_text("❌ Max devices reached")
         return
 
-    if len(k["used_by"]) >= int(k["devices"]):
-        await update.message.reply_text("❌ Device limit reached")
+    if datetime.now() > datetime.strptime(k["expire"], "%Y-%m-%d %H:%M:%S"):
+        await update.message.reply_text("❌ Key expired")
         return
 
-    k["used_by"].append(uid)
+    if user_id not in k["used"]:
+        k["used"].append(user_id)
 
-    duration = k["duration"]
-    now = datetime.now()
-
-    if duration == "lifetime":
-        exp = None
-    else:
-        num = int("".join(filter(str.isdigit, duration)) or 0)
-
-        if "h" in duration:
-            exp = now + timedelta(hours=num)
-        elif "m" in duration:
-            exp = now + timedelta(minutes=num)
-        else:
-            exp = now + timedelta(days=num)
-
-        exp = exp.isoformat()
-
-    d["redeemed"][uid] = {"key": key, "expires": exp}
-    save(d)
+    data["users"][user_id] = key
+    save_data(data)
 
     await update.message.reply_text("✅ Activated!")
 
-# ═══════════════════════════════
-# MAIN (FIXED)
-# ═══════════════════════════════
+# ================== AUTO START FIX ==================
+async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
+
+# ================== MAIN ==================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("createkeys", createkeys))
     app.add_handler(CommandHandler("redeem", redeem))
-    app.add_handler(CallbackQueryHandler(callback))
 
-    print("🔥 BOT RUNNING")
+    app.add_handler(CallbackQueryHandler(buttons))
+
+    # AUTO UI kahit walang /start
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto))
+
     app.run_polling()
 
-# ✅ FIXED PART (ETO LANG BINAGO)
 if __name__ == "__main__":
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w") as f:
-            json.dump({"admins": [], "keys": {}, "members": {}, "redeemed": {}}, f)
-
     main()
