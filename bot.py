@@ -26,14 +26,695 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════
 #  CONFIG
 # ══════════════════════════════════════════════════════
-BOT_TOKEN     = "8797773644:AAEqK3MGZOu2mQRAJKJZjnW7XRmThbbDiZA"
-OWNER_ID      = 8420104044
+BOT_TOKEN     = "8797773644:AAEqK3MGZOu2mQRAJKJZjnW7XRmThbbDiZA"         # <-- Replace with your token
+OWNER_ID      = 8420104044                             # <-- Replace with your Telegram ID
 CONTACT_ADMIN = "@Zeijie_s"
 
 DATA_FILE     = "data.json"
 DB_FOLDER     = "database"
 LINES_PER_USE = 250
 OUTPUT_PREFIX = "ZEIJIE-VIP-PREMIUM"
+
+GITHUB_TOKEN  = "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"    # <-- Set your GitHub token here
+GITHUB_REPO   = "https://github.com/delenakent19-glitch/VIP-BOT"    # <-- Format: "username/repo-name"  e.g. "zeijie/vip-bot"
+GITHUB_BRANCH = "main"
+
+os.makedirs(DB_FOLDER, exist_ok=True)
+
+# ══════════════════════════════════════════════════════
+#  LOGO
+# ══════════════════════════════════════════════════════
+LOGO = (
+    "╔══════════════════════════════════╗\n"
+    "║  ███████╗███████╗██╗ ██╗██╗██╗  ║\n"
+    "║  ╚══███╔╝██╔════╝██║ ██║██║██║  ║\n"
+    "║    ███╔╝ █████╗  ██║ ██║██║██║  ║\n"
+    "║   ███╔╝  ██╔══╝  ██║ ██║██║██║  ║\n"
+    "║  ███████╗███████╗╚██████╔╝██║   ║\n"
+    "║  ╚══════╝╚══════╝ ╚═════╝ ╚═╝   ║\n"
+    "║    ✦  V I P  P R E M I U M  ✦   ║\n"
+    "╚══════════════════════════════════╝"
+)
+
+WELCOME_LINES = [
+    "⚡ ZEIJIE BOT — locked, loaded, and ready.",
+    "🔥 Welcome to ZEIJIE BOT — your premium gateway.",
+    "🌐 ZEIJIE BOT online — Precision · Power · Premium.",
+    "🛡 ZEIJIE BOT activated — built different, built better.",
+    "💎 You've entered ZEIJIE BOT — where premium lives.",
+    "🚀 ZEIJIE BOT is live — Let's get to work.",
+    "🎯 ZEIJIE BOT standing by — the real deal starts here.",
+    "👾 ZEIJIE BOT loaded — No limits, only premium access.",
+]
+
+# ══════════════════════════════════════════════════════
+#  GITHUB SYNC
+# ══════════════════════════════════════════════════════
+GH_BASE = "https://api.github.com"
+
+def _gh_headers() -> dict:
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+async def github_push_file(repo_path: str, local_path: str):
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return
+    try:
+        with open(local_path, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode()
+        url     = f"{GH_BASE}/repos/{GITHUB_REPO}/contents/{repo_path}"
+        headers = _gh_headers()
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url, headers=headers, params={"ref": GITHUB_BRANCH})
+            sha  = resp.json().get("sha") if resp.status_code == 200 else None
+            payload = {
+                "message": f"auto-update {repo_path}",
+                "content": content_b64,
+                "branch":  GITHUB_BRANCH,
+            }
+            if sha:
+                payload["sha"] = sha
+            r2 = await client.put(url, headers=headers, json=payload)
+            if r2.status_code in (200, 201):
+                logger.info("GH push OK: %s", repo_path)
+            else:
+                logger.warning("GH push failed %s: %s", repo_path, r2.text[:200])
+    except Exception as e:
+        logger.error("GH push error: %s", e)
+
+async def github_pull_file(repo_path: str, local_path: str):
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return
+    try:
+        url     = f"{GH_BASE}/repos/{GITHUB_REPO}/contents/{repo_path}"
+        headers = _gh_headers()
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url, headers=headers, params={"ref": GITHUB_BRANCH})
+            if resp.status_code == 200:
+                content = base64.b64decode(resp.json()["content"])
+                os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+                with open(local_path, "wb") as f:
+                    f.write(content)
+                logger.info("GH pull OK: %s", repo_path)
+    except Exception as e:
+        logger.error("GH pull error: %s", e)
+
+# ══════════════════════════════════════════════════════
+#  DATA HELPERS
+# ══════════════════════════════════════════════════════
+DEFAULT_DATA = {
+    "admins": [],
+    "keys": {},
+    "members": {},
+    "stats": {"total_uses": 0}
+}
+
+def load() -> dict:
+    """Load data.json safely, creating it with defaults if missing."""
+    if not os.path.exists(DATA_FILE):
+        save(DEFAULT_DATA)
+        return DEFAULT_DATA.copy()
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Ensure all default keys exist
+        for k, v in DEFAULT_DATA.items():
+            if k not in data:
+                data[k] = v
+        return data
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error("Failed to load data.json: %s — resetting to defaults.", e)
+        save(DEFAULT_DATA)
+        return DEFAULT_DATA.copy()
+
+def save(data: dict):
+    """Save data.json atomically."""
+    try:
+        tmp = DATA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, DATA_FILE)
+    except IOError as e:
+        logger.error("Failed to save data.json: %s", e)
+
+# ══════════════════════════════════════════════════════
+#  PERMISSION HELPERS
+# ══════════════════════════════════════════════════════
+def is_owner(uid: int) -> bool:
+    return uid == OWNER_ID
+
+def is_admin(uid: int) -> bool:
+    data = load()
+    return uid == OWNER_ID or uid in data.get("admins", [])
+
+def is_member(uid: int) -> bool:
+    """Check if user has an active (non-expired) membership key."""
+    data = load()
+    members = data.get("members", {})
+    entry = members.get(str(uid))
+    if not entry:
+        return False
+    expiry_str = entry.get("expiry")
+    if not expiry_str:
+        return False
+    try:
+        expiry = datetime.fromisoformat(expiry_str)
+        return datetime.now() < expiry
+    except ValueError:
+        return False
+
+def is_buyer(uid: int) -> bool:
+    return is_member(uid) or is_admin(uid)
+
+DB_SUPPORTED_EXTS = {".txt", ".csv", ".log", ".combo", ".list", ".dat", ".text"}
+
+def get_db_files() -> list[str]:
+    """Return all supported database files in the database folder."""
+    try:
+        return [
+            f for f in os.listdir(DB_FOLDER)
+            if os.path.isfile(os.path.join(DB_FOLDER, f))
+            and Path(f).suffix.lower() in DB_SUPPORTED_EXTS
+        ]
+    except FileNotFoundError:
+        os.makedirs(DB_FOLDER, exist_ok=True)
+        return []
+
+# ══════════════════════════════════════════════════════
+#  KEY GENERATOR
+# ══════════════════════════════════════════════════════
+def gen_key(length: int = 16) -> str:
+    chars = string.ascii_uppercase + string.digits
+    return "ZEIJIE-" + "".join(random.choices(chars, k=length))
+
+# ══════════════════════════════════════════════════════
+#  /start
+# ══════════════════════════════════════════════════════
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    welcome = random.choice(WELCOME_LINES)
+
+    if is_admin(uid):
+        role_tag = "👑 OWNER" if is_owner(uid) else "🛡 ADMIN"
+        keyboard = [
+            [InlineKeyboardButton("📂 Database", callback_data="menu_db"),
+             InlineKeyboardButton("🔑 Gen Key",  callback_data="menu_genkey")],
+            [InlineKeyboardButton("👥 Members",  callback_data="menu_members"),
+             InlineKeyboardButton("📊 Stats",    callback_data="menu_stats")],
+            [InlineKeyboardButton("⚙️ Admin Panel", callback_data="menu_admin")],
+        ]
+    elif is_buyer(uid):
+        role_tag = "💎 VIP MEMBER"
+        keyboard = [
+            [InlineKeyboardButton("📂 Get Files", callback_data="menu_db")],
+            [InlineKeyboardButton("📊 My Status",  callback_data="menu_mystatus")],
+        ]
+    else:
+        role_tag = "👤 GUEST"
+        keyboard = [
+            [InlineKeyboardButton("🔑 Redeem Key", callback_data="menu_redeem")],
+            [InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{CONTACT_ADMIN.lstrip('@')}")],
+        ]
+
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"<pre>{LOGO}</pre>\n\n"
+        f"{welcome}\n\n"
+        f"Role: <b>{role_tag}</b>\n"
+        f"ID: <code>{uid}</code>",
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+# ══════════════════════════════════════════════════════
+#  ADMIN COMMANDS  (owner/admin only)
+# ══════════════════════════════════════════════════════
+async def cmd_genkey(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Admins only.")
+        return
+
+    # Usage: /genkey <days>
+    try:
+        days = int(ctx.args[0]) if ctx.args else 30
+    except (ValueError, IndexError):
+        days = 30
+
+    key  = gen_key()
+    data = load()
+    data["keys"][key] = {
+        "days": days,
+        "created": datetime.now().isoformat(),
+        "used_by": None,
+    }
+    save(data)
+    await update.message.reply_text(
+        f"✅ Key generated!\n\n<code>{key}</code>\n\nValid for <b>{days} days</b> after redemption.",
+        parse_mode="HTML",
+    )
+
+async def cmd_addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text("❌ Owner only.")
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: /addadmin <user_id>")
+        return
+    try:
+        target = int(ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+    data = load()
+    if target not in data["admins"]:
+        data["admins"].append(target)
+        save(data)
+    await update.message.reply_text(f"✅ <code>{target}</code> is now an admin.", parse_mode="HTML")
+
+async def cmd_removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text("❌ Owner only.")
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: /removeadmin <user_id>")
+        return
+    try:
+        target = int(ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+    data = load()
+    if target in data["admins"]:
+        data["admins"].remove(target)
+        save(data)
+    await update.message.reply_text(f"✅ <code>{target}</code> removed from admins.", parse_mode="HTML")
+
+async def cmd_listkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Admins only.")
+        return
+    data  = load()
+    keys  = data.get("keys", {})
+    unused = [k for k, v in keys.items() if not v.get("used_by")]
+    used   = [k for k, v in keys.items() if v.get("used_by")]
+    text = (
+        f"🔑 <b>Keys Overview</b>\n\n"
+        f"Unused: <b>{len(unused)}</b>\n"
+        f"Used:   <b>{len(used)}</b>\n\n"
+    )
+    if unused:
+        text += "📋 Unused keys:\n" + "\n".join(f"<code>{k}</code>" for k in unused[:10])
+        if len(unused) > 10:
+            text += f"\n…and {len(unused)-10} more."
+    await update.message.reply_text(text, parse_mode="HTML")
+
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Admins only.")
+        return
+    data    = load()
+    members = data.get("members", {})
+    active  = sum(1 for m in members.values()
+                  if datetime.now() < datetime.fromisoformat(m.get("expiry","2000-01-01")))
+    db_files = get_db_files()
+    total_lines = 0
+    for fn in db_files:
+        try:
+            with open(os.path.join(DB_FOLDER, fn), encoding="utf-8", errors="ignore") as f:
+                total_lines += sum(1 for _ in f)
+        except Exception:
+            pass
+    await update.message.reply_text(
+        f"📊 <b>Bot Stats</b>\n\n"
+        f"Active members : <b>{active}</b>\n"
+        f"Total members  : <b>{len(members)}</b>\n"
+        f"DB files       : <b>{len(db_files)}</b>\n"
+        f"Total DB lines : <b>{total_lines:,}</b>\n"
+        f"Total uses     : <b>{data['stats'].get('total_uses',0)}</b>",
+        parse_mode="HTML",
+    )
+
+async def cmd_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Admins only.")
+        return
+    if not ctx.args:
+        await update.message.reply_text("Usage: /broadcast <message>")
+        return
+    msg  = " ".join(ctx.args)
+    data = load()
+    sent = failed = 0
+    for mid in list(data.get("members", {}).keys()):
+        try:
+            await ctx.bot.send_message(int(mid), f"📢 <b>ZEIJIE BOT</b>\n\n{msg}", parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+    await update.message.reply_text(f"✅ Sent: {sent} | ❌ Failed: {failed}")
+
+async def cmd_dbinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Admins only.")
+        return
+    files = get_db_files()
+    if not files:
+        await update.message.reply_text("⚠️ No database files found in /database folder.")
+        return
+    lines_info = []
+    for fn in files:
+        try:
+            with open(os.path.join(DB_FOLDER, fn), encoding="utf-8", errors="ignore") as f:
+                count = sum(1 for _ in f)
+            lines_info.append(f"📄 {fn} — {count:,} lines")
+        except Exception as e:
+            lines_info.append(f"📄 {fn} — ⚠️ read error: {e}")
+    await update.message.reply_text(
+        "🗄 <b>Database Files</b>\n\n" + "\n".join(lines_info),
+        parse_mode="HTML",
+    )
+
+# ══════════════════════════════════════════════════════
+#  BUYER / MEMBER COMMANDS
+# ══════════════════════════════════════════════════════
+async def cmd_redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not ctx.args:
+        await update.message.reply_text(
+            "Usage: /redeem <KEY>\n\nGet a key from " + CONTACT_ADMIN
+        )
+        return
+    key  = ctx.args[0].strip().upper()
+    data = load()
+    keys = data.get("keys", {})
+
+    if key not in keys:
+        await update.message.reply_text("❌ Invalid key.")
+        return
+    if keys[key].get("used_by"):
+        await update.message.reply_text("❌ Key already used.")
+        return
+
+    days   = keys[key].get("days", 30)
+    expiry = datetime.now() + timedelta(days=days)
+    keys[key]["used_by"] = uid
+    keys[key]["used_at"] = datetime.now().isoformat()
+
+    members = data.setdefault("members", {})
+    members[str(uid)] = {
+        "expiry": expiry.isoformat(),
+        "key": key,
+    }
+    save(data)
+    await update.message.reply_text(
+        f"✅ Key redeemed!\n\n"
+        f"💎 Access granted for <b>{days} days</b>\n"
+        f"📅 Expires: <b>{expiry.strftime('%Y-%m-%d %H:%M')}</b>",
+        parse_mode="HTML",
+    )
+
+async def cmd_get(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Buyer command: get lines from database."""
+    uid = update.effective_user.id
+    if not is_buyer(uid):
+        await update.message.reply_text(
+            "❌ VIP access required.\n\nRedeem a key with /redeem <KEY>\n"
+            f"Get a key from {CONTACT_ADMIN}"
+        )
+        return
+
+    files = get_db_files()
+    if not files:
+        await update.message.reply_text(
+            "⚠️ Database is empty.\n\n"
+            "The admin has not uploaded any database files yet.\n"
+            "📁 Place .txt files inside the <code>database/</code> folder.",
+            parse_mode="HTML",
+        )
+        return
+
+    chosen_file = random.choice(files)
+    filepath    = os.path.join(DB_FOLDER, chosen_file)
+
+    try:
+        with open(filepath, encoding="utf-8", errors="ignore") as f:
+            all_lines = [l.strip() for l in f if l.strip()]
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error reading database: {e}")
+        return
+
+    if not all_lines:
+        await update.message.reply_text("⚠️ Database file is empty.")
+        return
+
+    sample = random.sample(all_lines, min(LINES_PER_USE, len(all_lines)))
+    out    = "\n".join(sample)
+
+    buf      = io.BytesIO(out.encode())
+    filename = f"{OUTPUT_PREFIX}-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+    buf.name = filename
+
+    data = load()
+    data["stats"]["total_uses"] = data["stats"].get("total_uses", 0) + 1
+    save(data)
+
+    await update.message.reply_document(
+        document=buf,
+        filename=filename,
+        caption=(
+            f"<pre>{LOGO}</pre>\n\n"
+            f"✅ <b>{len(sample)} lines</b> from <code>{chosen_file}</code>\n"
+            f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        ),
+        parse_mode="HTML",
+    )
+
+async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid  = update.effective_user.id
+    data = load()
+    entry = data.get("members", {}).get(str(uid))
+    if is_owner(uid):
+        await update.message.reply_text("👑 You are the <b>OWNER</b> — permanent access.", parse_mode="HTML")
+        return
+    if is_admin(uid):
+        await update.message.reply_text("🛡 You are an <b>ADMIN</b> — permanent access.", parse_mode="HTML")
+        return
+    if not entry:
+        await update.message.reply_text(
+            f"❌ No active membership.\nRedeem a key with /redeem <KEY>\nGet one from {CONTACT_ADMIN}"
+        )
+        return
+    expiry = datetime.fromisoformat(entry["expiry"])
+    left   = expiry - datetime.now()
+    if left.total_seconds() < 0:
+        await update.message.reply_text("❌ Your membership has expired.")
+        return
+    days_left = left.days
+    await update.message.reply_text(
+        f"💎 <b>VIP Member</b>\n\n"
+        f"Expires: <b>{expiry.strftime('%Y-%m-%d %H:%M')}</b>\n"
+        f"Days left: <b>{days_left}</b>",
+        parse_mode="HTML",
+    )
+
+# ══════════════════════════════════════════════════════
+#  HELP COMMAND  — role-aware
+# ══════════════════════════════════════════════════════
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+
+    buyer_cmds = (
+        "👤 <b>Your Commands</b>\n\n"
+        "/start — Main menu\n"
+        "/redeem <code>&lt;KEY&gt;</code> — Activate a VIP key\n"
+        "/get — Receive premium database lines\n"
+        "/mystatus — Check membership status\n"
+        "/help — Show this message\n"
+    )
+
+    admin_extra = (
+        "\n\n🛡 <b>Admin Commands</b>\n\n"
+        "/genkey <code>[days]</code> — Generate a key (default 30d)\n"
+        "/listkeys — List all keys\n"
+        "/addadmin <code>&lt;id&gt;</code> — Add admin (owner only)\n"
+        "/removeadmin <code>&lt;id&gt;</code> — Remove admin (owner only)\n"
+        "/stats — Bot statistics\n"
+        "/dbinfo — Database file info\n"
+        "/broadcast <code>&lt;msg&gt;</code> — Message all members\n"
+    )
+
+    if is_admin(uid):
+        await update.message.reply_text(buyer_cmds + admin_extra, parse_mode="HTML")
+    else:
+        await update.message.reply_text(buyer_cmds, parse_mode="HTML")
+
+# ══════════════════════════════════════════════════════
+#  CALLBACK QUERY HANDLER
+# ══════════════════════════════════════════════════════
+async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q   = update.callback_query
+    uid = q.from_user.id
+    await q.answer()
+    data_cb = q.data
+
+    if data_cb == "menu_db":
+        if not is_buyer(uid):
+            await q.message.reply_text("❌ VIP access required. Use /redeem <KEY>")
+            return
+        await cmd_get.__wrapped__(update, ctx) if hasattr(cmd_get, "__wrapped__") else await _do_get(q.message, uid, ctx)
+
+    elif data_cb == "menu_genkey":
+        if not is_admin(uid):
+            await q.message.reply_text("❌ Admins only.")
+            return
+        key  = gen_key()
+        d    = load()
+        d["keys"][key] = {"days": 30, "created": datetime.now().isoformat(), "used_by": None}
+        save(d)
+        await q.message.reply_text(f"✅ Key (30d):\n<code>{key}</code>", parse_mode="HTML")
+
+    elif data_cb == "menu_members":
+        if not is_admin(uid):
+            await q.message.reply_text("❌ Admins only.")
+            return
+        d       = load()
+        members = d.get("members", {})
+        active  = sum(1 for m in members.values()
+                      if datetime.now() < datetime.fromisoformat(m.get("expiry","2000-01-01")))
+        await q.message.reply_text(
+            f"👥 <b>Members</b>\nTotal: {len(members)} | Active: {active}",
+            parse_mode="HTML",
+        )
+
+    elif data_cb == "menu_stats":
+        if not is_admin(uid):
+            await q.message.reply_text("❌ Admins only.")
+            return
+        # reuse stats command
+        class FakeMsg:
+            async def reply_text(self, *a, **kw):
+                await q.message.reply_text(*a, **kw)
+        class FakeUpd:
+            effective_user = q.from_user
+            message = FakeMsg()
+        await cmd_stats(FakeUpd(), ctx)
+
+    elif data_cb == "menu_admin":
+        if not is_admin(uid):
+            await q.message.reply_text("❌ Admins only.")
+            return
+        await q.message.reply_text("⚙️ Use /help to see all admin commands.", parse_mode="HTML")
+
+    elif data_cb == "menu_redeem":
+        await q.message.reply_text(
+            f"Send: /redeem <code>&lt;YOUR_KEY&gt;</code>\n\nGet a key from {CONTACT_ADMIN}",
+            parse_mode="HTML",
+        )
+
+    elif data_cb == "menu_mystatus":
+        class FakeMsg:
+            async def reply_text(self, *a, **kw):
+                await q.message.reply_text(*a, **kw)
+        class FakeUpd:
+            effective_user = q.from_user
+            message = FakeMsg()
+        await cmd_mystatus(FakeUpd(), ctx)
+
+async def _do_get(message, uid: int, ctx):
+    """Shared logic for /get and inline button."""
+    files = get_db_files()
+    if not files:
+        await message.reply_text(
+            "⚠️ Database is empty. No .txt files found in <code>database/</code>.",
+            parse_mode="HTML",
+        )
+        return
+    chosen_file = random.choice(files)
+    filepath    = os.path.join(DB_FOLDER, chosen_file)
+    try:
+        with open(filepath, encoding="utf-8", errors="ignore") as f:
+            all_lines = [l.strip() for l in f if l.strip()]
+    except Exception as e:
+        await message.reply_text(f"❌ Error reading database: {e}")
+        return
+    if not all_lines:
+        await message.reply_text("⚠️ Database file is empty.")
+        return
+    sample   = random.sample(all_lines, min(LINES_PER_USE, len(all_lines)))
+    out      = "\n".join(sample)
+    buf      = io.BytesIO(out.encode())
+    filename = f"{OUTPUT_PREFIX}-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+    buf.name = filename
+    d = load()
+    d["stats"]["total_uses"] = d["stats"].get("total_uses", 0) + 1
+    save(d)
+    await message.reply_document(
+        document=buf,
+        filename=filename,
+        caption=(
+            f"<pre>{LOGO}</pre>\n\n"
+            f"✅ <b>{len(sample)} lines</b> from <code>{chosen_file}</code>\n"
+            f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        ),
+        parse_mode="HTML",
+    )
+
+# ══════════════════════════════════════════════════════
+#  STARTUP SYNC
+# ══════════════════════════════════════════════════════
+async def on_startup(app: Application):
+    logger.info("Bot starting — syncing from GitHub…")
+    await github_pull_file("data.json", DATA_FILE)
+    db_files = get_db_files()
+    for fn in db_files:
+        await github_pull_file(f"database/{fn}", os.path.join(DB_FOLDER, fn))
+    # Make sure data.json exists locally after pull
+    load()
+    logger.info("Startup sync complete.")
+
+# ══════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════
+def main():
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(on_startup)
+        .build()
+    )
+
+    # Admin commands
+    app.add_handler(CommandHandler("genkey",      cmd_genkey))
+    app.add_handler(CommandHandler("addadmin",    cmd_addadmin))
+    app.add_handler(CommandHandler("removeadmin", cmd_removeadmin))
+    app.add_handler(CommandHandler("listkeys",    cmd_listkeys))
+    app.add_handler(CommandHandler("stats",       cmd_stats))
+    app.add_handler(CommandHandler("dbinfo",      cmd_dbinfo))
+    app.add_handler(CommandHandler("broadcast",   cmd_broadcast))
+
+    # Buyer / member commands
+    app.add_handler(CommandHandler("start",       cmd_start))
+    app.add_handler(CommandHandler("help",        cmd_help))
+    app.add_handler(CommandHandler("redeem",      cmd_redeem))
+    app.add_handler(CommandHandler("get",         cmd_get))
+    app.add_handler(CommandHandler("mystatus",    cmd_mystatus))
+
+    # Inline buttons
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    logger.info("ZEIJIE VIP PREMIUM BOT is running…")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
 
 GITHUB_TOKEN  = "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"
 GITHUB_REPO   = "https://github.com/delenakent19-glitch/VIP-BOT"
