@@ -6,25 +6,24 @@ from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes
 )
 from telegram.constants import ParseMode
 
-# ═══════════════════════════════════════════════
-# CONFIG  — change these before running
-# ═══════════════════════════════════════════════
-BOT_TOKEN    = "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w"
-OWNER_ID     = 8420104044          # your Telegram numeric ID
-DATA_FILE    = "data.json"
-DB_FOLDER    = "database"
-LINES_PER_USE = 250               # lines sent per database request
+# ════════════════════════════════════════════════
+#  CONFIG  —  edit before running
+# ════════════════════════════════════════════════
+BOT_TOKEN     = "8797773644:AAHuuZurs0oiduQNW6ywxvTXQ1Kdf32XE9w"
+OWNER_ID      = 8420104044        # your Telegram numeric ID
+DATA_FILE     = "data.json"
+DB_FOLDER     = "database"
+LINES_PER_USE = 250
 
 os.makedirs(DB_FOLDER, exist_ok=True)
 
-# ═══════════════════════════════════════════════
-# LOGO
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  LOGO
+# ════════════════════════════════════════════════
 LOGO = (
     "```\n"
     "╔══════════════════════════════════╗\n"
@@ -39,9 +38,9 @@ LOGO = (
     "```"
 )
 
-# ═══════════════════════════════════════════════
-# DATA HELPERS
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  DATA HELPERS
+# ════════════════════════════════════════════════
 def load() -> dict:
     if not os.path.exists(DATA_FILE):
         return {"admins": [], "keys": {}, "members": {}, "redeemed": {}}
@@ -56,6 +55,7 @@ def is_admin(uid, d) -> bool:
     return str(uid) in [str(x) for x in d.get("admins", [])] or int(uid) == OWNER_ID
 
 def has_access(uid, d) -> bool:
+    """Admins always have access. Buyers need a valid non-expired redeemed key."""
     if is_admin(uid, d):
         return True
     rd = d.get("redeemed", {}).get(str(uid))
@@ -63,18 +63,17 @@ def has_access(uid, d) -> bool:
         return False
     exp = rd.get("expires")
     if not exp:
-        return True
+        return True  # lifetime
     return datetime.fromisoformat(exp) > datetime.now()
 
 def track(uid, username, first_name, d):
     d.setdefault("members", {})[str(uid)] = {
-        "username": username or "",
+        "username":   username or "",
         "first_name": first_name or "",
-        "joined": datetime.now().isoformat()
+        "joined":     datetime.now().isoformat(),
     }
 
 def get_db_files() -> list:
-    """Return only .txt files from the database folder, sorted."""
     return sorted(
         f for f in os.listdir(DB_FOLDER)
         if os.path.isfile(os.path.join(DB_FOLDER, f))
@@ -87,113 +86,116 @@ def count_lines(path: str) -> int:
     except Exception:
         return 0
 
-# ═══════════════════════════════════════════════
-# KEY HELPERS
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  KEY HELPERS
+# ════════════════════════════════════════════════
 def generate_key() -> str:
-    """ZEIJIE-PREMIUM-12345678-ABCD"""
-    nums = "".join(random.choices(string.digits, k=8))
+    """Format: ZEIJIE-PREMIUM-12345678-AB3D"""
+    nums   = "".join(random.choices(string.digits, k=8))
     suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
     return f"ZEIJIE-PREMIUM-{nums}-{suffix}"
 
-def parse_duration(duration: str):
+def parse_duration(raw: str):
     """
-    Parse duration string → (timedelta | None, human_label).
-    Supports: lifetime, 1h, 30m, 7d, 10days, 2hours, 45mins etc.
-    Returns (None, '♾️ Lifetime') for lifetime.
+    Returns (timedelta | None, label_str).
+    Accepts: lifetime, 1h, 30m, 7d, 10days, 2hours, 45mins ...
     """
-    dur = duration.strip().lower()
-    if dur in ("lifetime", "∞", "forever"):
-        return None, "♾️ Lifetime"
+    dur = raw.strip().lower()
+    if dur in ("lifetime", "forever", "∞"):
+        return None, "Lifetime"
 
-    num_str = "".join(c for c in dur if c.isdigit())
-    if not num_str:
-        raise ValueError(f"Cannot parse duration: {duration!r}")
-    num = int(num_str)
+    digits = "".join(c for c in dur if c.isdigit())
+    if not digits:
+        raise ValueError(f"Cannot parse duration: {raw!r}")
+    n = int(digits)
 
-    if "h" in dur or "hour" in dur:
-        return timedelta(hours=num), f"{num} hour{'s' if num != 1 else ''}"
-    elif "m" in dur or "min" in dur:
-        return timedelta(minutes=num), f"{num} minute{'s' if num != 1 else ''}"
-    elif "d" in dur or "day" in dur:
-        return timedelta(days=num), f"{num} day{'s' if num != 1 else ''}"
-    else:
-        # default = days
-        return timedelta(days=num), f"{num} day{'s' if num != 1 else ''}"
+    if "h" in dur:
+        return timedelta(hours=n),   f"{n} hour{'s' if n != 1 else ''}"
+    if "m" in dur and "month" not in dur:
+        return timedelta(minutes=n), f"{n} minute{'s' if n != 1 else ''}"
+    # default = days
+    return timedelta(days=n), f"{n} day{'s' if n != 1 else ''}"
 
-def expiry_display(exp_iso: str | None) -> str:
+def expiry_display(exp_iso) -> str:
     if not exp_iso:
-        return "♾️ Lifetime"
-    dt = datetime.fromisoformat(exp_iso)
-    return dt.strftime("%Y-%m-%d  %H:%M")
+        return "Never (Lifetime)"
+    return datetime.fromisoformat(exp_iso).strftime("%Y-%m-%d-%H-%M")
 
-# ═══════════════════════════════════════════════
-# MESSAGE TEMPLATES
-# ═══════════════════════════════════════════════
-def key_created_text(key: str, duration_label: str, expires_iso, devices: int) -> str:
-    exp_str = expiry_display(expires_iso) if expires_iso else "Never"
+# ════════════════════════════════════════════════
+#  MESSAGE BUILDERS
+# ════════════════════════════════════════════════
+def key_message(key: str, duration_label: str, expires_iso, devices: int) -> str:
+    """Plain text with monospace key block for easy tap-to-copy."""
+    exp_str = expiry_display(expires_iso)
     return (
-        "🔑 *Key Generated\\!*\n"
+        "🔑 *Key Generated!*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"`{key}`\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱ Duration  : {duration_label}\n"
-        f"📅 Expires   : {exp_str}\n"
-        f"👥 Max users : {devices}"
+        f"⏱ Duration   : {duration_label}\n"
+        f"📅 Expires    : {exp_str}\n"
+        f"👥 Max users  : {devices}"
     )
 
-def premium_text(game: str, sent: int, remaining: int) -> str:
+def premium_summary(fname_stem: str, sent: int, remaining: int) -> str:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
-        "🔮 ✨ *PREMIUM FILE GENERATED SUCCESSFULLY\\!* ✨ 🔮\n\n"
-        f"┣ 🎮 {game.upper()}\n"
-        f"┣ 📜 Lines Sent     : {sent}\n"
-        f"┣ 💾 Lines Remaining: {remaining:,}\n"
-        f"┣ 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        "🔒 Auto\\-delete in 5 minutes"
+        "🔮 ✨ PREMIUM FILE GENERATED SUCCESSFULLY! ✨ 🔮\n\n"
+        "📊 GENERATION SUMMARY\n"
+        f"┣ 🎮 Source Game      : {fname_stem.upper()}\n"
+        f"┣ 📜 Lines Generated  : {sent}\n"
+        f"┣ 🕐 Generated On     : {now}\n"
+        f"┣ 💾 Database Status  : {remaining:,} lines available\n"
+        "┣ 🧹 Cleanup Status   : ✅ Completed\n\n"
+        "🛡️ SECURITY & PRIVACY\n"
+        "┣ 🔒 Auto-Expiry      : 5 minutes\n"
+        "┣ 🗑️ Auto-Deletion    : Enabled\n"
+        "┣ 🛡️ Data Protection  : Active\n"
+        "┣ ⚡ Secure Session   : Verified\n\n"
+        "🚀 NEXT STEPS\n"
+        "┣ ⬇️ Download immediately\n"
+        "┣ ⏳ File expires in 5:00\n"
+        "┣ 🔄 Refresh for new generation\n"
+        "┣ 📚 Manage your data securely\n\n"
+        "⭐ Thank you for choosing Premium Service!"
     )
 
-# ═══════════════════════════════════════════════
-# KEYBOARDS
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  KEYBOARDS
+# ════════════════════════════════════════════════
 def kb_main(uid, d) -> InlineKeyboardMarkup:
     rows = []
     if is_admin(uid, d):
         rows.append([InlineKeyboardButton("⚡ Admin Panel", callback_data="admin")])
     rows += [
         [
-            InlineKeyboardButton("📂 Database",  callback_data="db"),
-            InlineKeyboardButton("🔑 Redeem",    callback_data="redeem_info"),
+            InlineKeyboardButton("📂 Database", callback_data="db"),
+            InlineKeyboardButton("🔑 Redeem",   callback_data="redeem_info"),
         ],
         [
-            InlineKeyboardButton("👤 Status",    callback_data="status"),
-            InlineKeyboardButton("📋 Commands",  callback_data="commands"),
+            InlineKeyboardButton("👤 Status",   callback_data="status"),
+            InlineKeyboardButton("📋 Commands", callback_data="commands"),
         ],
     ]
     return InlineKeyboardMarkup(rows)
 
 def kb_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔑 Create Key",    callback_data="adm_create")],
-        [InlineKeyboardButton("👥 List Admins",   callback_data="adm_list")],
-        [InlineKeyboardButton("🗝 Active Keys",   callback_data="adm_keys")],
-        [InlineKeyboardButton("🔙 Back",          callback_data="home")],
+        [InlineKeyboardButton("🔑 Create Key",  callback_data="adm_create")],
+        [InlineKeyboardButton("🗝 Active Keys", callback_data="adm_keys")],
+        [InlineKeyboardButton("👥 Admins List", callback_data="adm_list")],
+        [InlineKeyboardButton("🔙 Back",        callback_data="home")],
     ])
 
-def kb_back_admin() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Back", callback_data="admin")]
-    ])
+def kb_back(dest="home") -> InlineKeyboardMarkup:
+    label = "🔙 Back to Admin" if dest == "admin" else "🔙 Back"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=dest)]])
 
-def kb_back_home(uid, d) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Back", callback_data="home")]
-    ])
-
-# ═══════════════════════════════════════════════
-# /start
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  /start
+# ════════════════════════════════════════════════
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
+    d    = load()
     user = update.effective_user
     track(user.id, user.username, user.first_name, d)
     save(d)
@@ -201,58 +203,62 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     status = "✅ Active" if has_access(user.id, d) else "🔒 No Access"
     await update.message.reply_text(
         f"{LOGO}\n\n👋 *{user.first_name}*\n🔐 Status: {status}",
-        parse_mode=ParseMode.MARKDOWN_V2,
-        reply_markup=kb_main(user.id, d)
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb_main(user.id, d),
     )
 
-# ═══════════════════════════════════════════════
-# /createkeys  <devices> <duration>
-# Example:  /createkeys 1 10d
-#           /createkeys 3 2h
-#           /createkeys 1 lifetime
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  /createkeys <max_users> <duration>
+#  ADMIN ONLY
+# ════════════════════════════════════════════════
 async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
+    d   = load()
     uid = update.effective_user.id
 
+    # Strict admin-only check
     if not is_admin(uid, d):
-        await update.message.reply_text("❌ Admins only.")
+        await update.message.reply_text("❌ This command is for admins only.")
         return
 
     if len(ctx.args) < 2:
         await update.message.reply_text(
-            "Usage: `/createkeys <max\\_users> <duration>`\n\n"
-            "Duration examples: `1h` `30m` `7d` `10days` `lifetime`",
-            parse_mode=ParseMode.MARKDOWN_V2
+            "Usage: /createkeys <max_users> <duration>\n\n"
+            "Duration examples:\n"
+            "  10d      → 10 days\n"
+            "  2h       → 2 hours\n"
+            "  30m      → 30 minutes\n"
+            "  lifetime → never expires"
         )
         return
 
+    # Validate max_users
     try:
         devices = int(ctx.args[0])
         if devices < 1:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("❌ Max users must be a positive integer.")
+        await update.message.reply_text("❌ Max users must be a positive number (e.g. 1)")
         return
 
-    raw_duration = " ".join(ctx.args[1:])
+    # Validate & parse duration
+    raw_dur = " ".join(ctx.args[1:])
     try:
-        td, duration_label = parse_duration(raw_duration)
-    except ValueError as e:
-        await update.message.reply_text(f"❌ {e}")
+        td, duration_label = parse_duration(raw_dur)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid duration.\n\nExamples: 10d / 2h / 30m / lifetime"
+        )
         return
 
-    key = generate_key()
-    now = datetime.now()
+    now         = datetime.now()
+    key         = generate_key()
+    expires_dt  = (now + td) if td else None
+    expires_iso = expires_dt.isoformat() if expires_dt else None
 
-    if td is None:
-        expires_iso = None
-    else:
-        expires_iso = (now + td).isoformat()
-
+    # Save key to data.json
     d["keys"][key] = {
         "devices":    devices,
-        "duration":   raw_duration,
+        "duration":   raw_dur,
         "expires":    expires_iso,
         "used_by":    [],
         "created_by": str(uid),
@@ -260,83 +266,100 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     }
     save(d)
 
+    # Send the key — monospace so user can tap-to-copy
     await update.message.reply_text(
-        key_created_text(key, duration_label, expires_iso, devices),
-        parse_mode=ParseMode.MARKDOWN_V2
+        key_message(key, duration_label, expires_iso, devices),
+        parse_mode=ParseMode.MARKDOWN,
     )
 
-# ═══════════════════════════════════════════════
-# /redeem <key>
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  /redeem <key>
+# ════════════════════════════════════════════════
 async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
+    d   = load()
     uid = str(update.effective_user.id)
-    device_id = uid   # device locked to Telegram user ID
 
     if not ctx.args:
-        await update.message.reply_text(
-            "Usage: `/redeem ZEIJIE\\-PREMIUM\\-XXXXXXXX\\-XXXX`",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        await update.message.reply_text("Usage: /redeem ZEIJIE-PREMIUM-XXXXXXXX-XXXX")
         return
 
     key = ctx.args[0].strip().upper()
 
     if key not in d["keys"]:
-        await update.message.reply_text("❌ Invalid key\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("❌ Invalid key. Check and try again.")
         return
 
     k = d["keys"][key]
 
-    # Check if this device already redeemed this key
-    if device_id in k["used_by"]:
-        await update.message.reply_text(
-            "⚠️ This key is already activated on your device\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+    # Device lock — one uid per slot
+    if uid in k["used_by"]:
+        await update.message.reply_text("⚠️ This key is already activated on your account.")
         return
 
-    # Check device limit
     if len(k["used_by"]) >= int(k["devices"]):
-        await update.message.reply_text(
-            "❌ Device limit reached for this key\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+        await update.message.reply_text("❌ Device limit reached for this key.")
         return
 
-    # Check if key itself is expired (based on creation expiry, not per-user)
+    # Key-level expiry check
     key_exp = k.get("expires")
     if key_exp and datetime.fromisoformat(key_exp) < datetime.now():
-        await update.message.reply_text(
-            "❌ This key has expired\\.", parse_mode=ParseMode.MARKDOWN_V2
-        )
+        await update.message.reply_text("❌ This key has already expired.")
         return
 
     # Activate
-    k["used_by"].append(device_id)
+    k["used_by"].append(uid)
     d["redeemed"][uid] = {
         "key":       key,
         "expires":   key_exp,
-        "device_id": device_id,
+        "device_id": uid,
         "activated": datetime.now().isoformat(),
     }
     save(d)
 
-    exp_label = expiry_display(key_exp)
-    _, duration_label = parse_duration(k.get("duration", "lifetime"))
+    _, dur_label = parse_duration(k.get("duration", "lifetime"))
+    exp_label    = expiry_display(key_exp)
 
     await update.message.reply_text(
-        "✅ *Key Activated\\!*\n\n"
+        "✅ *Key Activated!*\n\n"
         f"🔑 `{key}`\n"
-        f"⏱ Duration : {duration_label}\n"
-        f"📅 Expires  : {exp_label}\n"
-        f"📱 Device   : Locked to your account",
-        parse_mode=ParseMode.MARKDOWN_V2
+        f"⏱ Duration  : {dur_label}\n"
+        f"📅 Expires   : {exp_label}\n"
+        f"📱 Device    : Locked to your account",
+        parse_mode=ParseMode.MARKDOWN,
     )
 
-# ═══════════════════════════════════════════════
-# /addadmin  (owner only)
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  /status
+# ════════════════════════════════════════════════
+async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d   = load()
+    uid = str(update.effective_user.id)
+
+    if is_admin(int(uid), d):
+        await update.message.reply_text(
+            "👑 *Admin Account* — Full access granted.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    rd = d["redeemed"].get(uid)
+    if not rd:
+        await update.message.reply_text("🔒 No active key. Use /redeem <key>")
+        return
+
+    exp = rd.get("expires")
+    if exp and datetime.fromisoformat(exp) < datetime.now():
+        await update.message.reply_text("⛔ Your key has *expired*.", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    await update.message.reply_text(
+        f"✅ *Active*\n\n🔑 `{rd['key']}`\n📅 Expires: {expiry_display(exp)}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+# ════════════════════════════════════════════════
+#  /addadmin <user_id>  — owner only
+# ════════════════════════════════════════════════
 async def addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -348,11 +371,11 @@ async def addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target not in d["admins"]:
         d["admins"].append(target)
         save(d)
-    await update.message.reply_text(f"✅ Admin added: `{target}`", parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(f"✅ Admin added: `{target}`", parse_mode=ParseMode.MARKDOWN)
 
-# ═══════════════════════════════════════════════
-# /removeadmin  (owner only)
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  /removeadmin <user_id>  — owner only
+# ════════════════════════════════════════════════
 async def removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -364,236 +387,200 @@ async def removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target in d["admins"]:
         d["admins"].remove(target)
         save(d)
-    await update.message.reply_text(f"✅ Admin removed: `{target}`", parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(f"✅ Admin removed: `{target}`", parse_mode=ParseMode.MARKDOWN)
 
-# ═══════════════════════════════════════════════
-# /status
-# ═══════════════════════════════════════════════
-async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d = load()
-    uid = str(update.effective_user.id)
-    rd = d["redeemed"].get(uid)
-
-    if is_admin(int(uid), d):
-        await update.message.reply_text(
-            "👑 *Admin Account*\nFull access granted\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return
-
-    if not rd:
-        await update.message.reply_text("🔒 No active key\\. Use `/redeem <key>`", parse_mode=ParseMode.MARKDOWN_V2)
-        return
-
-    exp = rd.get("expires")
-    if exp and datetime.fromisoformat(exp) < datetime.now():
-        await update.message.reply_text("⛔ Your key has expired\\.", parse_mode=ParseMode.MARKDOWN_V2)
-        return
-
-    await update.message.reply_text(
-        f"✅ *Active*\n\n🔑 `{rd['key']}`\n📅 Expires: {expiry_display(exp)}",
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-
-# ═══════════════════════════════════════════════
-# CALLBACK HANDLER
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  CALLBACK HANDLER
+# ════════════════════════════════════════════════
 async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q    = update.callback_query
     await q.answer()
 
-    d = load()
-    uid = q.from_user.id
+    d    = load()
+    uid  = q.from_user.id
     data = q.data
 
-    # ── Home ──────────────────────────────────
+    # ── Home ──────────────────────────────────────
     if data == "home":
         status = "✅ Active" if has_access(uid, d) else "🔒 No Access"
         await q.edit_message_text(
             f"{LOGO}\n\n👋 *{q.from_user.first_name}*\n🔐 Status: {status}",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_main(uid, d)
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_main(uid, d),
         )
 
-    # ── Commands ──────────────────────────────
+    # ── Commands ──────────────────────────────────
     elif data == "commands":
         await q.edit_message_text(
             "📋 *COMMANDS*\n\n"
             "/start — Main menu\n"
             "/redeem `<key>` — Activate a key\n"
             "/status — Check your access\n"
-            "/createkeys `<users> <duration>` — \\(admin\\)\n"
-            "/addadmin `<id>` — \\(owner\\)\n"
-            "/removeadmin `<id>` — \\(owner\\)",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Back", callback_data="home")
-            ]])
+            "/createkeys `<users> <duration>` _(admin only)_\n"
+            "/addadmin `<id>` _(owner only)_\n"
+            "/removeadmin `<id>` _(owner only)_",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("home"),
         )
 
-    # ── Redeem info ───────────────────────────
+    # ── Redeem info ───────────────────────────────
     elif data == "redeem_info":
         await q.edit_message_text(
             "🔑 *Redeem a Key*\n\n"
             "Send the command:\n"
-            "`/redeem ZEIJIE\\-PREMIUM\\-XXXXXXXX\\-XXXX`",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Back", callback_data="home")
-            ]])
+            "`/redeem ZEIJIE-PREMIUM-XXXXXXXX-XXXX`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("home"),
         )
 
-    # ── Status ────────────────────────────────
+    # ── Status ────────────────────────────────────
     elif data == "status":
-        rd = d["redeemed"].get(str(uid))
-
         if is_admin(uid, d):
             await q.edit_message_text(
-                "👑 *Admin Account*\nFull access granted\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=kb_back_home(uid, d)
+                "👑 *Admin Account*\nFull access granted.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb_back("home"),
             )
             return
 
+        rd = d["redeemed"].get(str(uid))
         if not rd:
             await q.edit_message_text(
-                "🔒 No active key\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=kb_back_home(uid, d)
+                "🔒 No active key.\nUse /redeem to activate one.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 How to Redeem", callback_data="redeem_info")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="home")],
+                ]),
             )
             return
 
         exp = rd.get("expires")
         if exp and datetime.fromisoformat(exp) < datetime.now():
             await q.edit_message_text(
-                "⛔ Your key has *expired*\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=kb_back_home(uid, d)
+                "⛔ Your key has *expired*.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=kb_back("home"),
             )
             return
 
         await q.edit_message_text(
             f"✅ *Active*\n\n🔑 `{rd['key']}`\n📅 Expires: {expiry_display(exp)}",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_back_home(uid, d)
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("home"),
         )
 
-    # ── Admin Panel ───────────────────────────
+    # ── Admin Panel ───────────────────────────────
     elif data == "admin":
         if not is_admin(uid, d):
             await q.answer("⛔ Admins only.", show_alert=True)
             return
-        total_keys = len(d.get("keys", {}))
+        total_keys    = len(d.get("keys", {}))
         total_members = len(d.get("members", {}))
         await q.edit_message_text(
             f"⚡ *ADMIN PANEL*\n\n"
-            f"🗝 Total keys: {total_keys}\n"
-            f"👥 Total users: {total_members}",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_admin()
+            f"🗝 Total Keys   : {total_keys}\n"
+            f"👥 Total Users  : {total_members}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_admin(),
         )
 
-    # ── Create Key (info) ─────────────────────
+    # ── Create Key guide ──────────────────────────
     elif data == "adm_create":
         if not is_admin(uid, d):
             await q.answer("⛔ Admins only.", show_alert=True)
             return
         await q.edit_message_text(
             "🔑 *Create a Key*\n\n"
-            "Use the command:\n"
-            "`/createkeys <max\\_users> <duration>`\n\n"
+            "Command:\n"
+            "`/createkeys <max_users> <duration>`\n\n"
             "*Duration examples:*\n"
-            "• `10d` — 10 days\n"
-            "• `2h` — 2 hours\n"
-            "• `30m` — 30 minutes\n"
-            "• `lifetime` — never expires",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_back_admin()
+            "• `10d`      — 10 days\n"
+            "• `2h`       — 2 hours\n"
+            "• `30m`      — 30 minutes\n"
+            "• `lifetime` — never expires\n\n"
+            "_Type the command in chat to generate._",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("admin"),
         )
 
-    # ── List Admins ───────────────────────────
-    elif data == "adm_list":
-        if not is_admin(uid, d):
-            await q.answer("⛔ Admins only.", show_alert=True)
-            return
-        admins = d.get("admins", [])
-        lines = [f"• `{a}`" for a in admins] or ["No extra admins\\."]
-        await q.edit_message_text(
-            "👥 *Admin List*\n\n" + "\n".join(lines),
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_back_admin()
-        )
-
-    # ── Active Keys ───────────────────────────
+    # ── Active Keys list ──────────────────────────
     elif data == "adm_keys":
         if not is_admin(uid, d):
             await q.answer("⛔ Admins only.", show_alert=True)
             return
         keys = d.get("keys", {})
         if not keys:
-            await q.edit_message_text(
-                "🗝 No keys created yet\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=kb_back_admin()
-            )
+            await q.edit_message_text("🗝 No keys created yet.", reply_markup=kb_back("admin"))
             return
 
         lines = []
-        for k, v in list(keys.items())[-10:]:   # show last 10
-            used = len(v.get("used_by", []))
+        for k, v in list(keys.items())[-15:]:
+            used  = len(v.get("used_by", []))
             max_d = v.get("devices", "?")
-            exp = expiry_display(v.get("expires"))
+            exp   = expiry_display(v.get("expires"))
             lines.append(f"`{k}`\n  👥 {used}/{max_d}  📅 {exp}")
 
         await q.edit_message_text(
-            "🗝 *Active Keys* \\(last 10\\)\n\n" + "\n\n".join(lines),
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=kb_back_admin()
+            "🗝 *Active Keys* (last 15)\n\n" + "\n\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("admin"),
         )
 
-    # ── Database list ─────────────────────────
+    # ── Admins list ───────────────────────────────
+    elif data == "adm_list":
+        if not is_admin(uid, d):
+            await q.answer("⛔ Admins only.", show_alert=True)
+            return
+        admins = d.get("admins", [])
+        body   = "\n".join(f"• `{a}`" for a in admins) if admins else "No extra admins."
+        await q.edit_message_text(
+            f"👥 *Admin List*\n\n{body}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb_back("admin"),
+        )
+
+    # ── Database list — buyers WITH valid key CAN access ──
     elif data == "db":
         if not has_access(uid, d):
             await q.edit_message_text(
-                "🔒 *Access Required*\n\nRedeem a key first\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔑 Redeem", callback_data="redeem_info"),
-                    InlineKeyboardButton("🔙 Back",   callback_data="home"),
-                ]])
+                "🔒 *Access Required*\n\n"
+                "You need an active key to access the database.\n"
+                "Use /redeem to activate your key.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 How to Redeem", callback_data="redeem_info")],
+                    [InlineKeyboardButton("🔙 Back",          callback_data="home")],
+                ]),
             )
             return
 
         files = get_db_files()
         if not files:
             await q.edit_message_text(
-                "📂 *Database is empty*\\.",
-                parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Back", callback_data="home")
-                ]])
+                "📂 Database is currently empty.",
+                reply_markup=kb_back("home"),
             )
             return
 
         rows = []
         for i, fname in enumerate(files):
-            path = os.path.join(DB_FOLDER, fname)
+            path  = os.path.join(DB_FOLDER, fname)
             count = count_lines(path)
             rows.append([
                 InlineKeyboardButton(
                     f"🗂 {Path(fname).stem.upper()}  ({count:,} lines)",
-                    callback_data=f"send_{i}"
+                    callback_data=f"send_{i}",
                 )
             ])
         rows.append([InlineKeyboardButton("🔙 Back", callback_data="home")])
 
         await q.edit_message_text(
-            "📂 *DATABASE*\n\nSelect a file to generate:",
-            parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=InlineKeyboardMarkup(rows)
+            "📂 *DATABASE*\n\nSelect a file to generate 250 lines:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(rows),
         )
 
-    # ── Send database file ────────────────────
+    # ── Send database file ────────────────────────
     elif data.startswith("send_"):
         if not has_access(uid, d):
             await q.answer("🔒 Access required.", show_alert=True)
@@ -613,64 +600,60 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         fname = files[idx]
         path  = os.path.join(DB_FOLDER, fname)
 
-        # Progress messages
-        msg = await q.message.reply_text("🔍 Initializing…  20%")
-        await asyncio.sleep(0.8)
-        await msg.edit_text("⚙️ Processing…  50%")
-        await asyncio.sleep(0.8)
-        await msg.edit_text("📦 Extracting…  80%")
-        await asyncio.sleep(0.8)
-        await msg.edit_text("✅ Completed  100%")
+        # Progress animation
+        msg = await q.message.reply_text("🔍 Initializing...  [▓░░░░]  20%")
+        await asyncio.sleep(0.7)
+        await msg.edit_text("⚙️ Processing...   [▓▓▓░░]  50%")
+        await asyncio.sleep(0.7)
+        await msg.edit_text("📦 Extracting...   [▓▓▓▓░]  80%")
+        await asyncio.sleep(0.7)
+        await msg.edit_text("✅ Completed       [▓▓▓▓▓] 100%")
 
-        # Read & slice
+        # Read all lines
         with open(path, "r", errors="replace") as f:
-            lines = f.readlines()
+            all_lines = f.readlines()
 
-        total_before = len(lines)
-        chunk = lines[:LINES_PER_USE]
+        chunk     = all_lines[:LINES_PER_USE]
+        remaining = all_lines[LINES_PER_USE:]
 
         if not chunk:
-            await q.message.reply_text("⚠️ This database file is empty\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await q.message.reply_text("⚠️ This database file is currently empty.")
             return
 
-        # ── DECREASE database: remove used lines ──
-        remaining_lines = lines[LINES_PER_USE:]
-        remaining_count = len(remaining_lines)
-
+        # DECREASE: write back remaining lines (removes used 250)
         with open(path, "w", errors="replace") as f:
-            f.writelines(remaining_lines)
+            f.writelines(remaining)
 
-        # Send file
-        bio = io.BytesIO("".join(chunk).encode("utf-8", errors="replace"))
+        # Send file to user
+        bio      = io.BytesIO("".join(chunk).encode("utf-8", errors="replace"))
         bio.name = f"ZEIJIE-PREMIUM-{Path(fname).stem.upper()}.txt"
         await q.message.reply_document(bio)
 
-        # Stats message
-        done = await q.message.reply_text(
-            premium_text(Path(fname).stem, len(chunk), remaining_count),
-            parse_mode=ParseMode.MARKDOWN_V2
+        # Full premium summary message (plain text — no markdown parse issues)
+        summary_msg = await q.message.reply_text(
+            premium_summary(Path(fname).stem, len(chunk), len(remaining))
         )
 
-        # Auto-delete after 5 minutes
+        # Auto-delete progress + summary after 5 minutes
         await asyncio.sleep(300)
-        for m in (done, msg):
+        for m in (summary_msg, msg):
             try:
                 await m.delete()
             except Exception:
                 pass
 
-# ═══════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════
+# ════════════════════════════════════════════════
+#  MAIN
+# ════════════════════════════════════════════════
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start",        start))
-    app.add_handler(CommandHandler("createkeys",   createkeys))
-    app.add_handler(CommandHandler("redeem",       redeem))
-    app.add_handler(CommandHandler("status",       status_cmd))
-    app.add_handler(CommandHandler("addadmin",     addadmin))
-    app.add_handler(CommandHandler("removeadmin",  removeadmin))
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("createkeys",  createkeys))
+    app.add_handler(CommandHandler("redeem",      redeem))
+    app.add_handler(CommandHandler("status",      status_cmd))
+    app.add_handler(CommandHandler("addadmin",    addadmin))
+    app.add_handler(CommandHandler("removeadmin", removeadmin))
     app.add_handler(CallbackQueryHandler(callback))
 
     print("🔥 ZEIJIE BOT RUNNING")
