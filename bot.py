@@ -35,7 +35,7 @@ DB_FOLDER     = "database"
 LINES_PER_USE = 250
 OUTPUT_PREFIX = "ZEIJIE-VIP-PREMIUM"
 
-GITHUB_TOKEN  = "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"
+GITHUB_TOKEN  = "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"
 GITHUB_REPO   = "delenakent19-glitch/VIP-BOT"
 GITHUB_BRANCH = "main"
 
@@ -131,10 +131,37 @@ async def gh_pull(repo_path: str, local_path: str) -> bool:
                 raw     = resp.json().get("content", "")
                 content = base64.b64decode(raw)
                 os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-                with open(local_path, "wb") as f:
-                    f.write(content)
-                logger.info("GH pull OK: %s", repo_path)
-                return True
+
+                # For data.json: merge remote into local so we never lose keys/redemptions
+                if local_path == DATA_FILE and os.path.exists(local_path):
+                    try:
+                        remote_data = json.loads(content)
+                        with open(local_path, "r", encoding="utf-8") as f:
+                            local_data = json.load(f)
+                        # Merge: remote wins for admins list, but local wins for keys/redeemed
+                        # (local is always the freshest for transactional data)
+                        merged = remote_data.copy()
+                        for field in ("keys", "redeemed", "members", "db_names", "activity_log"):
+                            local_val  = local_data.get(field)
+                            remote_val = remote_data.get(field)
+                            if isinstance(local_val, dict) and isinstance(remote_val, dict):
+                                # Union of both — local entries take priority
+                                merged[field] = {**remote_val, **local_val}
+                            elif isinstance(local_val, list) and isinstance(remote_val, list):
+                                # For lists (admins, activity_log) prefer whichever is larger
+                                merged[field] = local_val if len(local_val) >= len(remote_val) else remote_val
+                        with open(local_path, "w", encoding="utf-8") as f:
+                            json.dump(merged, f, indent=2, ensure_ascii=False)
+                        logger.info("GH pull+merge OK: %s", repo_path)
+                        return True
+                    except Exception as merge_err:
+                        logger.warning("GH merge failed (%s) — keeping local file as-is", merge_err)
+                        return False
+                else:
+                    with open(local_path, "wb") as f:
+                        f.write(content)
+                    logger.info("GH pull OK: %s", repo_path)
+                    return True
             else:
                 logger.warning("GH pull skipped %s — HTTP %s",
                                repo_path, resp.status_code)
@@ -1501,12 +1528,16 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  STARTUP SYNC
 # ══════════════════════════════════════════════════════
 async def on_startup(app: Application):
-    logger.info("Startup — pulling from GitHub...")
+    logger.info("Startup — syncing with GitHub...")
+    # Pull+merge remote into local (local keys/redemptions are never overwritten)
     await gh_pull("data.json", DATA_FILE)
+    # Push the merged result back so GitHub stays current
+    d = load()
+    await gh_push("data.json", DATA_FILE)
     for fname in get_db_files():
         await gh_pull(f"database/{fname}", os.path.join(DB_FOLDER, fname))
-    load()
-    logger.info("Startup sync done.")
+    logger.info("Startup sync done. Keys: %d | Redeemed: %d",
+                len(d.get("keys", {})), len(d.get("redeemed", {})))
 
 # ══════════════════════════════════════════════════════
 #  MAIN
