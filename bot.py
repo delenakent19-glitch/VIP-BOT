@@ -6,13 +6,11 @@
 ╚══════════════════════════════════════╝
 """
 
-import os, json, random, string, io, asyncio, logging, base64, threading
+import os, json, random, string, io, asyncio, logging, base64
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
-from flask import Flask, jsonify, request
-from flask_cors import CORS
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -26,10 +24,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════
-#  CONFIG  <- fill in your values before running
+#  CONFIG
 # ══════════════════════════════════════════════════════
-BOT_TOKEN     = "8797773644:AAEqK3MGZOu2mQRAJKJZjnW7XRmThbbDiZA"   # from @BotFather
-OWNER_ID      = 8420104044                       # your Telegram numeric ID
+BOT_TOKEN     = "8797773644:AAEqK3MGZOu2mQRAJKJZjnW7XRmThbbDiZA"
+OWNER_ID      = 8420104044
 CONTACT_ADMIN = "@Zeijie_s"
 
 DATA_FILE     = "data.json"
@@ -37,16 +35,10 @@ DB_FOLDER     = "database"
 LINES_PER_USE = 250
 OUTPUT_PREFIX = "ZEIJIE-VIP-PREMIUM"
 
-# GitHub sync — leave blank ("") to disable
 GITHUB_TOKEN  = "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"
-GITHUB_REPO   = "delenakent19-glitch/VIP-BOT"      # "username/repo-name"
+GITHUB_REPO   = "delenakent19-glitch/VIP-BOT"
 GITHUB_BRANCH = "main"
 
-# Admin Panel API secret — CHANGE THIS to something strong!
-API_SECRET    = "zeijie-admin-secret-2026"
-API_PORT      = 5000
-
-# All file extensions accepted as database files
 DB_SUPPORTED_EXTS = {
     ".txt", ".csv", ".log", ".combo",
     ".list", ".dat", ".text", ".conf",
@@ -155,19 +147,18 @@ async def gh_pull(repo_path: str, local_path: str) -> bool:
 #  DATA HELPERS
 # ══════════════════════════════════════════════════════
 _DEFAULT: dict = {
-    "admins":      [],
-    "keys":        {},
-    "members":     {},
-    "redeemed":    {},
-    "db_names":    {},
-    "maintenance": False,
-    "maint_msg":   "",
+    "admins":       [],
+    "keys":         {},
+    "members":      {},
+    "redeemed":     {},
+    "db_names":     {},
+    "activity_log": [],
 }
 
 def load() -> dict:
     if not os.path.exists(DATA_FILE):
         _write_default()
-        return {k: (v.copy() if isinstance(v, dict) else (list(v) if isinstance(v, list) else v))
+        return {k: (v.copy() if isinstance(v, (dict, list)) else v)
                 for k, v in _DEFAULT.items()}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -178,7 +169,7 @@ def load() -> dict:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("data.json load failed (%s) — resetting.", e)
         _write_default()
-        return {k: (v.copy() if isinstance(v, dict) else (list(v) if isinstance(v, list) else v))
+        return {k: (v.copy() if isinstance(v, (dict, list)) else v)
                 for k, v in _DEFAULT.items()}
 
 def _write_default():
@@ -207,6 +198,14 @@ def track(uid, username, first_name, d):
         "first_name": first_name or "",
         "last_seen":  datetime.now().isoformat(),
     }
+
+def log_activity(d: dict, event: str):
+    entry = {
+        "time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "event": event,
+    }
+    d.setdefault("activity_log", []).append(entry)
+    d["activity_log"] = d["activity_log"][-200:]
 
 # ══════════════════════════════════════════════════════
 #  PERMISSION HELPERS
@@ -358,10 +357,7 @@ def msg_bulk_keys(keys: list, dur_label: str) -> str:
     )
 
 def msg_key_redeemed(key: str, expires_iso) -> str:
-    if expires_iso:
-        expiry_line = f"🔑 Expiry: {expiry_display(expires_iso)}"
-    else:
-        expiry_line = "🔑 Expiry: Lifetime"
+    expiry_line = f"🔑 Expiry: {expiry_display(expires_iso)}" if expires_iso else "🔑 Expiry: Lifetime"
     return (
         "✅ Key Activated!\n\n"
         f"{expiry_line}\n"
@@ -423,6 +419,71 @@ async def _auto_delete(delay: int, *msgs):
             pass
 
 # ══════════════════════════════════════════════════════
+#  LOADING ANIMATION HELPER
+# ══════════════════════════════════════════════════════
+async def _loading_animation(message) -> None:
+    steps = [
+        "🔄 10% Initializing key engine...",
+        "🔄 25% Accessing secure database nodes...",
+        "🔄 50% Generating unique key hash...",
+        "🔄 75% Applying encryption layer...",
+        "🔄 95% Finalizing key registration...",
+        "✅ 100% Key generated successfully!",
+    ]
+    for step in steps:
+        try:
+            await message.edit_text(step)
+        except Exception:
+            pass
+        await asyncio.sleep(0.6)
+    await asyncio.sleep(0.3)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+# ══════════════════════════════════════════════════════
+#  ADMIN OVERVIEW BUILDER
+# ══════════════════════════════════════════════════════
+def build_admin_overview(d: dict) -> str:
+    keys     = d.get("keys", {})
+    members  = d.get("members", {})
+    redeemed = d.get("redeemed", {})
+    admins   = d.get("admins", [])
+    files    = get_db_files()
+
+    total_keys     = len(keys)
+    unused_keys    = sum(1 for v in keys.values() if not v.get("used_by"))
+    used_keys      = total_keys - unused_keys
+    total_members  = len(members)
+    active_users   = sum(1 for uid in redeemed
+                         if not is_admin(int(uid), d) and has_access(int(uid), d))
+    expired_users  = sum(1 for uid, rd in redeemed.items()
+                         if is_expired(rd) and not is_admin(int(uid), d))
+    total_db_lines = sum(count_lines(os.path.join(DB_FOLDER, f)) for f in files)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    return (
+        "╔══════════════════════════════════╗\n"
+        "║     ⚡ ADMIN CONTROL PANEL ⚡     ║\n"
+        "╚══════════════════════════════════╝\n\n"
+        f"🕐 Updated: {now}\n\n"
+        "━━━━━━ 🔑 KEY STATS ━━━━━━\n"
+        f"┣ 📦 Total Keys    : {total_keys}\n"
+        f"┣ ✅ Used          : {used_keys}\n"
+        f"┣ 🆕 Unused        : {unused_keys}\n\n"
+        "━━━━━━ 👥 USER STATS ━━━━━━\n"
+        f"┣ 👤 Total Members : {total_members}\n"
+        f"┣ 🟢 Active Users  : {active_users}\n"
+        f"┣ 🔴 Expired Users : {expired_users}\n"
+        f"┣ 👮 Admins        : {len(admins) + 1}\n\n"
+        "━━━━━━ 💾 DATABASE ━━━━━━\n"
+        f"┣ 📁 DB Files      : {len(files)}\n"
+        f"┣ 📄 Total Lines   : {total_db_lines:,}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+# ══════════════════════════════════════════════════════
 #  KEYBOARDS
 # ══════════════════════════════════════════════════════
 def kb_main(uid, d) -> InlineKeyboardMarkup:
@@ -445,16 +506,35 @@ def kb_main(uid, d) -> InlineKeyboardMarkup:
 
 def kb_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔑 Create Key",  callback_data="adm_create")],
-        [InlineKeyboardButton("🎉 Bulk Keys",   callback_data="adm_bulk_info")],
-        [InlineKeyboardButton("🗝 Active Keys", callback_data="adm_keys")],
-        [InlineKeyboardButton("👥 Admins List", callback_data="adm_list")],
-        [InlineKeyboardButton("👥 All Members", callback_data="adm_members")],
-        [InlineKeyboardButton("🔙 Back",        callback_data="home")],
+        [
+            InlineKeyboardButton("📊 Overview",     callback_data="adm_overview"),
+            InlineKeyboardButton("🔑 Create Key",   callback_data="adm_create"),
+        ],
+        [
+            InlineKeyboardButton("🎉 Bulk Keys",    callback_data="adm_bulk_info"),
+            InlineKeyboardButton("🗝 Keys Log",     callback_data="adm_keys"),
+        ],
+        [
+            InlineKeyboardButton("👥 Members Log",  callback_data="adm_members"),
+            InlineKeyboardButton("🟢 Active Users", callback_data="adm_active"),
+        ],
+        [
+            InlineKeyboardButton("💾 DB Stats",     callback_data="adm_dbstats"),
+            InlineKeyboardButton("📜 Activity Log", callback_data="adm_activity"),
+        ],
+        [
+            InlineKeyboardButton("👮 Admins List",  callback_data="adm_list"),
+            InlineKeyboardButton("📣 Broadcast",    callback_data="adm_broadcast"),
+        ],
+        [
+            InlineKeyboardButton("🗑 Expired Keys", callback_data="adm_expired"),
+            InlineKeyboardButton("🔄 Sync GitHub",  callback_data="adm_sync"),
+        ],
+        [InlineKeyboardButton("🔙 Back", callback_data="home")],
     ])
 
 def kb_back(dest="home") -> InlineKeyboardMarkup:
-    label = "Back to Admin" if dest == "admin" else "🔙 Back"
+    label = "🔙 Back to Admin" if dest == "admin" else "🔙 Back"
     return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=dest)]])
 
 def kb_db_files(files: list, d: dict) -> InlineKeyboardMarkup:
@@ -501,32 +581,13 @@ def build_welcome(first_name, username, uid, d) -> str:
     )
 
 # ══════════════════════════════════════════════════════
-#  MAINTENANCE CHECK MIDDLEWARE
-# ══════════════════════════════════════════════════════
-async def check_maintenance(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Returns True if bot is in maintenance and user should be blocked."""
-    d = load()
-    if not d.get("maintenance", False):
-        return False
-    uid = update.effective_user.id if update.effective_user else None
-    if uid and is_admin(uid, d):
-        return False
-    msg = d.get("maint_msg") or "🔧 Bot is temporarily offline for maintenance. Please check back later."
-    if update.message:
-        await update.message.reply_text(msg)
-    elif update.callback_query:
-        await update.callback_query.answer(msg, show_alert=True)
-    return True
-
-# ══════════════════════════════════════════════════════
 #  /start
 # ══════════════════════════════════════════════════════
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if await check_maintenance(update, ctx):
-        return
     d    = load()
     user = update.effective_user
     track(user.id, user.username, user.first_name, d)
+    log_activity(d, f"User @{user.username or user.id} opened the bot")
     save_local(d)
     await update.message.reply_text(
         build_welcome(user.first_name, user.username, user.id, d),
@@ -534,11 +595,9 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 # ══════════════════════════════════════════════════════
-#  /help  — role-aware
+#  /help
 # ══════════════════════════════════════════════════════
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if await check_maintenance(update, ctx):
-        return
     d   = load()
     uid = update.effective_user.id
 
@@ -557,10 +616,10 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/bulkkeys    <prefix> <n> <dur> - Bulk keys\n"
         "/revokekey   <key>              - Delete a key\n"
         "/customname  <file> <n>         - Set DB display name\n"
+        "/broadcast   <message>          - Send msg to all users\n"
         "/syncgithub                     - Pull from GitHub\n"
         "/addadmin    <id>               - Add admin (owner only)\n"
         "/removeadmin <id>               - Remove admin (owner only)\n"
-        "/maintenance on|off [message]   - Toggle maintenance mode\n"
     )
 
     await update.message.reply_text(
@@ -571,8 +630,6 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  /redeem <key>
 # ══════════════════════════════════════════════════════
 async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if await check_maintenance(update, ctx):
-        return
     d   = load()
     uid = str(update.effective_user.id)
     track(int(uid), update.effective_user.username,
@@ -627,6 +684,8 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "activated": now.isoformat(),
     }
 
+    uname = update.effective_user.username or uid
+    log_activity(d, f"Key redeemed: {key} by @{uname} | expires: {expires_iso or 'Lifetime'}")
     await save_and_push(d)
     await update.message.reply_text(msg_key_redeemed(key, expires_iso))
 
@@ -634,8 +693,6 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  /status
 # ══════════════════════════════════════════════════════
 async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if await check_maintenance(update, ctx):
-        return
     d   = load()
     uid = str(update.effective_user.id)
     track(int(uid), update.effective_user.username,
@@ -677,31 +734,7 @@ async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 # ══════════════════════════════════════════════════════
-#  LOADING ANIMATION HELPER
-# ══════════════════════════════════════════════════════
-async def _loading_animation(message) -> None:
-    steps = [
-        "🔄 10% Initializing key engine...",
-        "🔄 25% Accessing secure database nodes...",
-        "🔄 50% Generating unique key hash...",
-        "🔄 75% Applying encryption layer...",
-        "🔄 95% Finalizing key registration...",
-        "✅ 100% Key generated successfully!",
-    ]
-    for step in steps:
-        try:
-            await message.edit_text(step)
-        except Exception:
-            pass
-        await asyncio.sleep(0.6)
-    await asyncio.sleep(0.3)
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-# ══════════════════════════════════════════════════════
-#  ADMIN: /createkeys <max_users> <duration>
+#  ADMIN: /createkeys
 # ══════════════════════════════════════════════════════
 async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d   = load()
@@ -750,6 +783,8 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "created_at":  datetime.now().isoformat(),
     }
 
+    uname = update.effective_user.username or str(uid)
+    log_activity(d, f"Key created: {key} | duration={raw_dur} | devices={devices} | by @{uname}")
     await save_and_push(d)
 
     anim = await update.message.reply_text("🔄 10% Initializing key engine...")
@@ -762,7 +797,7 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 # ══════════════════════════════════════════════════════
-#  ADMIN: /bulkkeys <prefix> <count> <duration>
+#  ADMIN: /bulkkeys
 # ══════════════════════════════════════════════════════
 async def bulkkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d   = load()
@@ -813,6 +848,8 @@ async def bulkkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "created_at":  now_iso,
         }
 
+    uname = update.effective_user.username or str(uid)
+    log_activity(d, f"Bulk keys: {count} keys | prefix={prefix} | duration={raw_dur} | by @{uname}")
     await save_and_push(d)
 
     anim = await update.message.reply_text("🔄 10% Initializing key engine...")
@@ -826,7 +863,7 @@ async def bulkkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 # ══════════════════════════════════════════════════════
-#  ADMIN: /revokekey <key>
+#  ADMIN: /revokekey
 # ══════════════════════════════════════════════════════
 async def revokekey(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d   = load()
@@ -844,11 +881,63 @@ async def revokekey(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     del d["keys"][key]
     d["redeemed"] = {u: v for u, v in d["redeemed"].items()
                      if v.get("key") != key}
+    uname = update.effective_user.username or str(uid)
+    log_activity(d, f"Key revoked: {key} by @{uname}")
     await save_and_push(d)
     await update.message.reply_text(f"Key revoked: {key}")
 
 # ══════════════════════════════════════════════════════
-#  ADMIN: /customname <filename> <display name>
+#  ADMIN: /broadcast
+# ══════════════════════════════════════════════════════
+async def broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d   = load()
+    uid = update.effective_user.id
+    if not is_admin(uid, d):
+        await update.message.reply_text("Admins only.")
+        return
+    if not ctx.args:
+        await update.message.reply_text(
+            "Usage: /broadcast <message>\n\n"
+            "Example: /broadcast Maintenance tonight at 10 PM."
+        )
+        return
+
+    msg_text = " ".join(ctx.args)
+    members  = d.get("members", {})
+    sent     = 0
+    failed   = 0
+
+    status_msg = await update.message.reply_text(
+        f"📣 Broadcasting to {len(members)} users..."
+    )
+
+    broadcast_text = (
+        "📣 ᴀɴɴᴏᴜɴᴄᴇᴍᴇɴᴛ ғʀᴏᴍ ᴀᴅᴍɪɴ\n\n"
+        f"{msg_text}\n\n"
+        f"— {CONTACT_ADMIN}"
+    )
+
+    for m_id in members:
+        try:
+            await ctx.bot.send_message(chat_id=int(m_id), text=broadcast_text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    uname = update.effective_user.username or str(uid)
+    log_activity(d, f"Broadcast by @{uname}: {msg_text[:60]} | sent={sent} failed={failed}")
+    save_local(d)
+
+    await status_msg.edit_text(
+        f"📣 Broadcast complete!\n\n"
+        f"✅ Sent   : {sent}\n"
+        f"❌ Failed : {failed}\n"
+        f"👥 Total  : {len(members)}"
+    )
+
+# ══════════════════════════════════════════════════════
+#  ADMIN: /customname
 # ══════════════════════════════════════════════════════
 async def customname(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d   = load()
@@ -905,40 +994,10 @@ async def syncgithub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         r = await gh_pull(f"database/{fname}", os.path.join(DB_FOLDER, fname))
         if not r:
             ok2 = False
-    status = "Sync complete!" if (ok1 and ok2) else "Sync done with some errors. Check logs."
-    await msg.edit_text(status)
-
-# ══════════════════════════════════════════════════════
-#  ADMIN: /maintenance on|off [message]
-# ══════════════════════════════════════════════════════
-async def maintenance_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d   = load()
-    uid = update.effective_user.id
-    if not is_admin(uid, d):
-        await update.message.reply_text("Admins only.")
-        return
-    if not ctx.args:
-        status = "ON" if d.get("maintenance") else "OFF"
-        await update.message.reply_text(
-            f"Maintenance is currently: {status}\n\n"
-            "Usage: /maintenance on [message]\n"
-            "       /maintenance off"
-        )
-        return
-    toggle = ctx.args[0].lower()
-    if toggle == "on":
-        msg = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else "🔧 Bot is temporarily offline for maintenance."
-        d["maintenance"] = True
-        d["maint_msg"]   = msg
-        await save_and_push(d)
-        await update.message.reply_text(f"✅ Maintenance mode ENABLED.\nMessage: {msg}")
-    elif toggle == "off":
-        d["maintenance"] = False
-        d["maint_msg"]   = ""
-        await save_and_push(d)
-        await update.message.reply_text("✅ Maintenance mode DISABLED. Bot is back online.")
-    else:
-        await update.message.reply_text("Usage: /maintenance on|off [message]")
+    result = "Sync complete!" if (ok1 and ok2) else "Sync done with some errors. Check logs."
+    log_activity(d, f"GitHub sync by @{update.effective_user.username or uid}: {result}")
+    save_local(d)
+    await msg.edit_text(result)
 
 # ══════════════════════════════════════════════════════
 #  OWNER: /addadmin  /removeadmin
@@ -954,6 +1013,7 @@ async def addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target = str(ctx.args[0])
     if target not in [str(a) for a in d["admins"]]:
         d["admins"].append(target)
+        log_activity(d, f"Admin added: {target} by owner")
         await save_and_push(d)
     await update.message.reply_text(f"Admin added: {target}")
 
@@ -968,6 +1028,7 @@ async def removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target = str(ctx.args[0])
     if target in [str(a) for a in d["admins"]]:
         d["admins"] = [a for a in d["admins"] if str(a) != target]
+        log_activity(d, f"Admin removed: {target} by owner")
         await save_and_push(d)
         await update.message.reply_text(f"Removed: {target}")
     else:
@@ -985,12 +1046,6 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     save_local(d)
     await q.answer()
 
-    # Maintenance block for non-admins
-    if d.get("maintenance") and not is_admin(uid, d):
-        msg = d.get("maint_msg") or "🔧 Bot is temporarily offline for maintenance."
-        await q.answer(msg, show_alert=True)
-        return
-
     if data == "home":
         await q.edit_message_text(
             build_welcome(q.from_user.first_name, q.from_user.username, uid, d),
@@ -1002,7 +1057,16 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("Admins only.", show_alert=True)
             return
         await q.edit_message_text(
-            "Admin Panel\n\nChoose an option:",
+            build_admin_overview(d),
+            reply_markup=kb_admin(),
+        )
+
+    elif data == "adm_overview":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        await q.edit_message_text(
+            build_admin_overview(d),
             reply_markup=kb_admin(),
         )
 
@@ -1011,7 +1075,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("Admins only.", show_alert=True)
             return
         await q.edit_message_text(
-            "Create Keys\n\n"
+            "🔑 Create Key\n\n"
             "Single:\n  /createkeys <max_users> <duration>\n\n"
             "Bulk:\n  /bulkkeys <prefix> <count> <duration>\n\n"
             "Examples:\n"
@@ -1026,7 +1090,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("Admins only.", show_alert=True)
             return
         await q.edit_message_text(
-            "Bulk Key Generator\n\n"
+            "🎉 Bulk Key Generator\n\n"
             "Command:\n  /bulkkeys <prefix> <count> <duration>\n\n"
             "Example:\n  /bulkkeys ZEIJIE 5 1d\n\n"
             "Each key is one-time use.",
@@ -1041,42 +1105,38 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         redeemed = d.get("redeemed", {})
         members  = d.get("members", {})
         if not keys:
-            txt = "No keys yet.\n\nUse /createkeys or /bulkkeys."
+            txt = "🗝 Keys Log\n\nNo keys yet.\n\nUse /createkeys or /bulkkeys."
         else:
-            lines = [f"All Keys ({len(keys)}):\n"]
+            unused = sum(1 for v in keys.values() if not v.get("used_by"))
+            used   = len(keys) - unused
+            lines  = [
+                f"🗝 Keys Log\n"
+                f"Total: {len(keys)}  |  Used: {used}  |  Unused: {unused}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            ]
             for k, v in keys.items():
                 used_by  = v.get("used_by", [])
                 devices  = v.get("devices", 1)
                 raw_dur  = v.get("duration", "?")
                 used_cnt = len(used_by)
-                status   = ("Unused" if used_cnt == 0
-                            else "Partial" if used_cnt < devices
-                            else "Full")
+                created  = v.get("created_at", "?")[:10]
+                status   = ("🆕 Unused" if used_cnt == 0
+                            else "🔶 Partial" if used_cnt < devices
+                            else "✅ Full")
                 block = (
-                    f"[{status}] {k}\n"
-                    f"  Duration: {raw_dur}  Users: {used_cnt}/{devices}"
+                    f"{status} | {k}\n"
+                    f"  Duration: {raw_dur} | Users: {used_cnt}/{devices} | Created: {created}"
                 )
                 for u_id in used_by:
                     rd    = redeemed.get(str(u_id))
                     uname = members.get(str(u_id), {}).get("username", "")
                     label = f"@{uname}" if uname else f"uid:{u_id}"
                     exp_s = expiry_display(rd["expires"]) if rd else "Unknown"
-                    block += f"\n  - {label}: {exp_s}"
+                    block += f"\n  └ {label}: {exp_s}"
                 lines.append(block)
             txt = "\n\n".join(lines)
             if len(txt) > 3800:
-                txt = txt[:3800] + "\n\n... truncated"
-        await q.edit_message_text(txt, reply_markup=kb_back("admin"))
-
-    elif data == "adm_list":
-        if not is_admin(uid, d):
-            await q.answer("Admins only.", show_alert=True)
-            return
-        admins = d.get("admins", [])
-        txt = (
-            "No extra admins." if not admins
-            else "Admins:\n\n" + "\n".join(f"  {a}" for a in admins)
-        )
+                txt = txt[:3800] + "\n\n... (truncated)"
         await q.edit_message_text(txt, reply_markup=kb_back("admin"))
 
     elif data == "adm_members":
@@ -1086,22 +1146,186 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         members  = d.get("members", {})
         redeemed = d.get("redeemed", {})
         if not members:
-            txt = "No members yet."
+            txt = "👥 Members Log\n\nNo members yet."
         else:
-            lines = [f"Members ({len(members)}):\n"]
+            active = sum(1 for m in members if has_access(int(m), d))
+            lines  = [
+                f"👥 Members Log\n"
+                f"Total: {len(members)}  |  Active: {active}  |  Inactive: {len(members)-active}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            ]
             for m_id, info in members.items():
                 uname = info.get("username", "")
                 fname = info.get("first_name", "")
                 label = f"@{uname}" if uname else (fname or m_id)
                 rd    = redeemed.get(m_id)
-                acc   = "Active" if has_access(int(m_id), d) else "Expired"
+                acc   = "🟢 Active" if has_access(int(m_id), d) else "🔴 Expired"
                 exp_s = expiry_display(rd["expires"]) if rd else "No key"
+                key_s = rd["key"] if rd else "—"
+                seen  = info.get("last_seen", "?")[:16]
                 lines.append(
-                    f"[{acc}] {label} (id:{m_id})\n  Expires: {exp_s}")
+                    f"{acc} | {label} (id: {m_id})\n"
+                    f"  Key: {key_s}\n"
+                    f"  Expires: {exp_s}\n"
+                    f"  Last seen: {seen}"
+                )
             txt = "\n\n".join(lines)
             if len(txt) > 3800:
-                txt = txt[:3800] + "\n\n... truncated"
+                txt = txt[:3800] + "\n\n... (truncated)"
         await q.edit_message_text(txt, reply_markup=kb_back("admin"))
+
+    elif data == "adm_active":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        members  = d.get("members", {})
+        redeemed = d.get("redeemed", {})
+        active   = {m: info for m, info in members.items()
+                    if has_access(int(m), d) and not is_admin(int(m), d)}
+        if not active:
+            txt = "🟢 Active Users\n\nNo active users right now."
+        else:
+            lines = [
+                f"🟢 Active Users ({len(active)})\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            ]
+            for m_id, info in active.items():
+                uname = info.get("username", "")
+                fname = info.get("first_name", "")
+                label = f"@{uname}" if uname else (fname or m_id)
+                rd    = redeemed.get(m_id)
+                exp_s = expiry_display(rd["expires"]) if rd else "Lifetime"
+                lines.append(f"✅ {label} (id: {m_id})\n  Expires: {exp_s}")
+            txt = "\n\n".join(lines)
+            if len(txt) > 3800:
+                txt = txt[:3800] + "\n\n... (truncated)"
+        await q.edit_message_text(txt, reply_markup=kb_back("admin"))
+
+    elif data == "adm_dbstats":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        files = get_db_files()
+        if not files:
+            txt = "💾 Database Stats\n\nNo database files found."
+        else:
+            total_lines = sum(count_lines(os.path.join(DB_FOLDER, f)) for f in files)
+            lines = [
+                f"💾 Database Stats\n"
+                f"Files: {len(files)}  |  Total Lines: {total_lines:,}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            ]
+            for fname in files:
+                fpath = os.path.join(DB_FOLDER, fname)
+                cnt   = count_lines(fpath)
+                disp  = get_display_name(fname, d)
+                size  = os.path.getsize(fpath)
+                size_s = f"{size/1024:.1f} KB" if size < 1024*1024 else f"{size/1024/1024:.1f} MB"
+                lines.append(
+                    f"📁 {disp.upper()}\n"
+                    f"  File: {fname}\n"
+                    f"  Lines: {cnt:,}  |  Size: {size_s}"
+                )
+            txt = "\n\n".join(lines)
+        await q.edit_message_text(txt, reply_markup=kb_back("admin"))
+
+    elif data == "adm_activity":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        log = d.get("activity_log", [])
+        if not log:
+            txt = "📜 Activity Log\n\nNo activity recorded yet."
+        else:
+            recent = list(reversed(log[-30:]))
+            lines  = [
+                f"📜 Activity Log (last {len(recent)} events)\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            ]
+            for entry in recent:
+                lines.append(f"🕐 {entry['time']}\n   {entry['event']}")
+            txt = "\n\n".join(lines)
+            if len(txt) > 3800:
+                txt = txt[:3800] + "\n\n... (truncated)"
+        await q.edit_message_text(txt, reply_markup=kb_back("admin"))
+
+    elif data == "adm_expired":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        keys     = d.get("keys", {})
+        redeemed = d.get("redeemed", {})
+        members  = d.get("members", {})
+        expired_list = []
+        for k, v in keys.items():
+            for u_id in v.get("used_by", []):
+                rd = redeemed.get(str(u_id))
+                if rd and is_expired(rd):
+                    uname = members.get(str(u_id), {}).get("username", "")
+                    label = f"@{uname}" if uname else f"uid:{u_id}"
+                    expired_list.append((k, label, rd.get("expires", "?")))
+        if not expired_list:
+            txt = "🗑 Expired Keys\n\nNo expired key redemptions found."
+        else:
+            lines = [
+                f"🗑 Expired Keys ({len(expired_list)})\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            ]
+            for k, label, exp in expired_list:
+                exp_fmt = exp[:19] if exp and exp != "?" else "?"
+                lines.append(f"❌ {k}\n  User: {label}\n  Expired: {exp_fmt}")
+            txt = "\n\n".join(lines)
+            if len(txt) > 3800:
+                txt = txt[:3800] + "\n\n... (truncated)"
+        await q.edit_message_text(txt, reply_markup=kb_back("admin"))
+
+    elif data == "adm_sync":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        await q.edit_message_text("🔄 Syncing from GitHub...")
+        ok1 = await gh_pull("data.json", DATA_FILE)
+        ok2 = True
+        for fname in get_db_files():
+            r = await gh_pull(f"database/{fname}", os.path.join(DB_FOLDER, fname))
+            if not r:
+                ok2 = False
+        result = "✅ Sync complete!" if (ok1 and ok2) else "⚠️ Sync done with some errors."
+        d2 = load()
+        log_activity(d2, f"GitHub sync via panel by uid:{uid}: {result}")
+        save_local(d2)
+        await q.edit_message_text(result, reply_markup=kb_back("admin"))
+
+    elif data == "adm_list":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        admins = d.get("admins", [])
+        lines  = [
+            f"👮 Admins List\n"
+            f"Total: {len(admins) + 1} (including owner)\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━\n",
+            f"👑 Owner: {OWNER_ID}",
+        ]
+        for a in admins:
+            lines.append(f"👮 Admin: {a}")
+        txt = "\n".join(lines)
+        await q.edit_message_text(txt, reply_markup=kb_back("admin"))
+
+    elif data == "adm_broadcast":
+        if not is_admin(uid, d):
+            await q.answer("Admins only.", show_alert=True)
+            return
+        members = d.get("members", {})
+        await q.edit_message_text(
+            f"📣 Broadcast\n\n"
+            f"Total recipients: {len(members)}\n\n"
+            "Use the command:\n"
+            "  /broadcast <your message>\n\n"
+            "Example:\n"
+            "  /broadcast Maintenance tonight at 10 PM.",
+            reply_markup=kb_back("admin"),
+        )
 
     elif data == "db":
         files = get_db_files()
@@ -1145,8 +1369,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         total = count_lines(fpath)
         if total == 0:
-            await q.answer(
-                "This database is empty. Choose another.", show_alert=True)
+            await q.answer("This database is empty. Choose another.", show_alert=True)
             return
 
         db_steps = [
@@ -1177,6 +1400,10 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         out_name               = output_filename(disp)
         buf                    = io.BytesIO(content.encode("utf-8"))
         buf.name               = out_name
+
+        uname = q.from_user.username or str(uid)
+        log_activity(d, f"DB downloaded: {disp} | {lines_to_send} lines | by @{uname}")
+        save_local(d)
 
         sent_msg = await q.message.reply_document(
             document=buf,
@@ -1244,8 +1471,8 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "/bulkkeys    <prefix> <n> <dur>\n"
                 "/revokekey   <key>\n"
                 "/customname  <file> <n>\n"
+                "/broadcast   <message>\n"
                 "/syncgithub\n"
-                "/maintenance on|off [msg]\n"
                 "/addadmin    <id>  (owner only)\n"
                 "/removeadmin <id>  (owner only)\n"
             )
@@ -1258,7 +1485,7 @@ KNOWN_COMMANDS = {
     "start", "help", "redeem", "status",
     "createkeys", "bulkkeys", "revokekey",
     "customname", "syncgithub", "addadmin", "removeadmin",
-    "maintenance",
+    "broadcast",
 }
 
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1269,211 +1496,6 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Unknown command.\n\nUse /help to see available commands or /start to open the menu."
     )
-
-# ══════════════════════════════════════════════════════
-#  FLASK API SERVER  (runs in a background thread)
-# ══════════════════════════════════════════════════════
-flask_app = Flask(__name__)
-CORS(flask_app)
-
-def api_auth(req):
-    return req.headers.get("X-Secret") == API_SECRET
-
-@flask_app.route("/api/data")
-def api_get_data():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    d = load()
-    db_files = get_db_files()
-    db_info = []
-    for fname in db_files:
-        fpath = os.path.join(DB_FOLDER, fname)
-        lines = count_lines(fpath)
-        size  = os.path.getsize(fpath)
-        size_str = f"{size/1024:.1f} KB" if size < 1024*1024 else f"{size/1024/1024:.1f} MB"
-        db_info.append({
-            "file":    fname,
-            "display": get_display_name(fname, d),
-            "lines":   lines,
-            "size":    size_str,
-            "status":  "ok"
-        })
-    return jsonify({**d, "db_files": db_info})
-
-@flask_app.route("/api/keys/create", methods=["POST"])
-def api_create_key():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    body    = request.json or {}
-    devices = int(body.get("devices", 1))
-    raw_dur = body.get("duration", "lifetime")
-    try:
-        td, dur_label = parse_duration(raw_dur)
-    except ValueError:
-        return jsonify({"error": "Invalid duration"}), 400
-    key = generate_key()
-    d   = load()
-    d["keys"][key] = {
-        "devices":     devices,
-        "duration":    raw_dur,
-        "used_by":     [],
-        "user_expiry": {},
-        "created_by":  "admin_panel",
-        "created_at":  datetime.now().isoformat(),
-    }
-    save_local(d)
-    return jsonify({"ok": True, "key": key, "duration": dur_label, "devices": devices})
-
-@flask_app.route("/api/keys/bulk", methods=["POST"])
-def api_bulk_keys():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    body    = request.json or {}
-    prefix  = body.get("prefix", "ZEIJIE-PREMIUM")
-    count   = int(body.get("count", 5))
-    raw_dur = body.get("duration", "lifetime")
-    devices = int(body.get("devices", 1))
-    if not 1 <= count <= 100:
-        return jsonify({"error": "Count must be 1-100"}), 400
-    try:
-        td, dur_label = parse_duration(raw_dur)
-    except ValueError:
-        return jsonify({"error": "Invalid duration"}), 400
-    keys    = generate_bulk_keys(prefix, count)
-    now_iso = datetime.now().isoformat()
-    d       = load()
-    for k in keys:
-        d["keys"][k] = {
-            "devices":     devices,
-            "duration":    raw_dur,
-            "used_by":     [],
-            "user_expiry": {},
-            "created_by":  "admin_panel",
-            "created_at":  now_iso,
-        }
-    save_local(d)
-    return jsonify({"ok": True, "keys": keys, "duration": dur_label})
-
-@flask_app.route("/api/keys/revoke", methods=["POST"])
-def api_revoke_key():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    key = (request.json or {}).get("key", "").upper()
-    d   = load()
-    if key not in d["keys"]:
-        return jsonify({"error": "Key not found"}), 404
-    del d["keys"][key]
-    d["redeemed"] = {u: v for u, v in d["redeemed"].items() if v.get("key") != key}
-    save_local(d)
-    return jsonify({"ok": True})
-
-@flask_app.route("/api/keys/revoke-expired", methods=["POST"])
-def api_revoke_expired():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    d      = load()
-    before = len(d["keys"])
-    to_del = [k for k, v in d["keys"].items()
-              if v.get("used_by") and all(
-                  is_expired({"expires": v.get("user_expiry", {}).get(uid)})
-                  for uid in v.get("used_by", [])
-              )]
-    for k in to_del:
-        del d["keys"][k]
-    save_local(d)
-    return jsonify({"ok": True, "removed": before - len(d["keys"])})
-
-@flask_app.route("/api/admins/add", methods=["POST"])
-def api_add_admin():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    uid = str((request.json or {}).get("id", ""))
-    if not uid:
-        return jsonify({"error": "Missing id"}), 400
-    d = load()
-    if uid not in [str(a) for a in d["admins"]]:
-        d["admins"].append(uid)
-        save_local(d)
-    return jsonify({"ok": True})
-
-@flask_app.route("/api/admins/remove", methods=["POST"])
-def api_remove_admin():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    uid = str((request.json or {}).get("id", ""))
-    if uid == str(OWNER_ID):
-        return jsonify({"error": "Cannot remove owner"}), 400
-    d = load()
-    d["admins"] = [a for a in d["admins"] if str(a) != uid]
-    save_local(d)
-    return jsonify({"ok": True})
-
-@flask_app.route("/api/members/ban", methods=["POST"])
-def api_ban_member():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    uid = str((request.json or {}).get("id", ""))
-    d   = load()
-    d["members"].pop(uid, None)
-    d["redeemed"].pop(uid, None)
-    save_local(d)
-    return jsonify({"ok": True})
-
-@flask_app.route("/api/maintenance", methods=["POST"])
-def api_maintenance():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    body    = request.json or {}
-    enabled = bool(body.get("enabled", False))
-    msg     = body.get("message", "🔧 Bot is temporarily offline for maintenance.")
-    d       = load()
-    d["maintenance"] = enabled
-    d["maint_msg"]   = msg if enabled else ""
-    save_local(d)
-    return jsonify({"ok": True, "maintenance": enabled})
-
-@flask_app.route("/api/db/rename", methods=["POST"])
-def api_db_rename():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    body  = request.json or {}
-    fname = body.get("file", "")
-    name  = body.get("name", "")
-    if not fname or not name:
-        return jsonify({"error": "Missing file or name"}), 400
-    d = load()
-    d.setdefault("db_names", {})[fname] = name
-    save_local(d)
-    return jsonify({"ok": True})
-
-@flask_app.route("/api/broadcast", methods=["POST"])
-def api_broadcast():
-    if not api_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    body = request.json or {}
-    # Returns the list of user IDs to broadcast to — actual sending done by bot
-    d      = load()
-    target = body.get("target", "all")
-    members  = d.get("members", {})
-    redeemed = d.get("redeemed", {})
-    if target == "active":
-        ids = [uid for uid in members if has_access(int(uid), d)]
-    elif target == "expired":
-        ids = [uid for uid, rd in redeemed.items() if is_expired(rd)]
-    elif target == "admins":
-        ids = [str(a) for a in d.get("admins", [])] + [str(OWNER_ID)]
-    else:
-        ids = list(members.keys())
-    return jsonify({"ok": True, "recipient_ids": ids, "count": len(ids)})
-
-@flask_app.route("/api/health")
-def api_health():
-    return jsonify({"ok": True, "bot": "ZEIJIE VIP", "time": datetime.now().isoformat()})
-
-def run_flask():
-    import logging as lg
-    lg.getLogger("werkzeug").setLevel(lg.ERROR)
-    flask_app.run(host="0.0.0.0", port=API_PORT, debug=False, use_reloader=False)
 
 # ══════════════════════════════════════════════════════
 #  STARTUP SYNC
@@ -1490,11 +1512,6 @@ async def on_startup(app: Application):
 #  MAIN
 # ══════════════════════════════════════════════════════
 def main():
-    # Start Flask API in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"Admin API running on port {API_PORT}")
-
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -1502,24 +1519,24 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start",        start))
-    app.add_handler(CommandHandler("help",         help_cmd))
-    app.add_handler(CommandHandler("redeem",       redeem))
-    app.add_handler(CommandHandler("status",       status_cmd))
-    app.add_handler(CommandHandler("createkeys",   createkeys))
-    app.add_handler(CommandHandler("bulkkeys",     bulkkeys))
-    app.add_handler(CommandHandler("revokekey",    revokekey))
-    app.add_handler(CommandHandler("customname",   customname))
-    app.add_handler(CommandHandler("syncgithub",   syncgithub))
-    app.add_handler(CommandHandler("maintenance",  maintenance_cmd))
-    app.add_handler(CommandHandler("addadmin",     addadmin))
-    app.add_handler(CommandHandler("removeadmin",  removeadmin))
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("help",        help_cmd))
+    app.add_handler(CommandHandler("redeem",      redeem))
+    app.add_handler(CommandHandler("status",      status_cmd))
+    app.add_handler(CommandHandler("createkeys",  createkeys))
+    app.add_handler(CommandHandler("bulkkeys",    bulkkeys))
+    app.add_handler(CommandHandler("revokekey",   revokekey))
+    app.add_handler(CommandHandler("customname",  customname))
+    app.add_handler(CommandHandler("broadcast",   broadcast))
+    app.add_handler(CommandHandler("syncgithub",  syncgithub))
+    app.add_handler(CommandHandler("addadmin",    addadmin))
+    app.add_handler(CommandHandler("removeadmin", removeadmin))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(
         filters.COMMAND &
         ~filters.Regex(
             r"^/(?:start|help|redeem|status|createkeys|bulkkeys"
-            r"|revokekey|customname|syncgithub|addadmin|removeadmin|maintenance)(?:@\S+)?(?:\s|$)"
+            r"|revokekey|customname|syncgithub|addadmin|removeadmin|broadcast)(?:@\S+)?(?:\s|$)"
         ),
         unknown_command,
     ))
