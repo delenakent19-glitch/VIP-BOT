@@ -331,53 +331,54 @@ def expiry_display(exp_iso) -> str:
 #  STYLED MESSAGES  (small-caps unicode, zero markdown)
 # ══════════════════════════════════════════════════════
 
+def _sc(text: str) -> str:
+    """Convert ASCII letters to Unicode small-caps."""
+    table = str.maketrans(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘqʀsᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘqʀsᴛᴜᴠᴡxʏᴢ"
+    )
+    return text.translate(table)
+
 def msg_key_generated(key: str, dur_label: str, devices: int) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
-        "🎉 ᴋᴇʏ ɢᴇɴᴇʀᴀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!\n\n"
-        "🔑 ᴋᴇʏ ᴅᴇᴛᴀɪʟs\n"
-        f"┣ 🎫 ᴀᴄᴄᴇss ᴋᴇʏ  :  {key}\n"
-        f"┣ ⏳ ᴠᴀʟɪᴅɪᴛʏ    :  🗓 {dur_label}\n"
-        f"┣ 👥 ᴍᴀx ᴜsᴇʀs  :  {devices}\n"
-        "┣ 📝 sᴛᴀᴛᴜs      :  ᴏɴᴇ-ᴛɪᴍᴇ ᴜsᴇ\n"
-        f"┣ 📅 ᴄʀᴇᴀᴛᴇᴅ    :  {now}\n\n"
-        "🛡 sᴇᴄᴜʀɪᴛʏ ɴᴏᴛᴇs\n"
-        "┣ ✦ sɪɴɢʟᴇ-ᴀᴄᴛɪᴠᴀᴛɪᴏɴ ᴏɴʟʏ\n"
-        "┣ ✦ ᴀᴜᴛᴏ-ᴇxᴘɪʀʏ ᴇɴᴀʙʟᴇᴅ\n"
-        "┣ ✦ ɴᴏɴ-ᴛʀᴀɴsғᴇʀᴀʙʟᴇ\n\n"
-        "📤 ᴅɪsᴛʀɪʙᴜᴛɪᴏɴ\n"
-        "sʜᴀʀᴇ ᴛʜɪs ᴋᴇʏ ᴡɪᴛʜ ʏᴏᴜʀ ᴜsᴇʀ ᴛᴏ ɢʀᴀɴᴛ ᴘʀᴇᴍɪᴜᴍ ᴀᴄᴄᴇss!"
+        f"🎉 {_sc('Key Generated Successfully')}!\n\n"
+        f"🔑 {_sc('Key Details')}\n"
+        f"┣ 🎫 {_sc('Access Key')}  :  {key}\n"
+        f"┣ ⏳ {_sc('Validity')}    :  🗓 {_sc(dur_label)}\n"
+        f"┣ 👥 {_sc('Max Users')}   :  {devices}\n"
+        f"┣ 📝 {_sc('Status')}      :  {_sc('One-Time Use')}\n"
+        f"┣ 📅 {_sc('Created')}     :  {now}\n\n"
+        f"🛡 {_sc('Security Notes')}\n"
+        f"┣ ✦ {_sc('Single-Activation Only')}\n"
+        f"┣ ✦ {_sc('Auto-Expiry Enabled')}\n"
+        f"┣ ✦ {_sc('Non-Transferable')}\n\n"
+        f"📤 {_sc('Distribution')}\n"
+        f"{_sc('Share this key with your user to grant premium access')}!"
     )
 
 def msg_bulk_keys(keys: list, dur_label: str) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Convert each key to small-caps style display
-    def to_smallcaps(k: str) -> str:
-        table = str.maketrans(
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-            "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘqʀsᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘqʀsᴛᴜᴠᴡxʏᴢ"
-        )
-        return k.translate(table)
-    keys_text = "\n".join(to_smallcaps(k) for k in keys)
+    keys_text = "\n".join(_sc(k) for k in keys)
     return (
-        f"🎉 {len(keys)} Keys Generated Successfully! 🎉\n\n"
+        f"🎉 {_sc(f'{len(keys)} Keys Generated Successfully')}! 🎉\n\n"
         f"{keys_text}\n\n"
-        f"⏳ Validity (each) :  ⏱ {dur_label}\n"
-        "📝 Status          :  One-time use\n"
-        f"📅 Created On      :  {now}\n\n"
-        "✨ Share these keys with your users to grant them access!"
+        f"⏳ {_sc('Validity (each)')} :  ⏱ {_sc(dur_label)}\n"
+        f"📝 {_sc('Status')}          :  {_sc('One-time use')}\n"
+        f"📅 {_sc('Created On')}      :  {now}\n\n"
+        f"✨ {_sc('Share these keys with your users to grant them access')}!"
     )
 
 def msg_key_redeemed(key: str, expires_iso) -> str:
     """Exact format requested for successful redemption."""
     if expires_iso:
-        expiry_line = f"🔑 Expiry: {expiry_display(expires_iso)}"
+        expiry_line = f"🔑 {_sc('Expiry')}: {expiry_display(expires_iso)}"
     else:
-        expiry_line = "🔑 Expiry: ♾️ Lifetime"
+        expiry_line = f"🔑 {_sc('Expiry')}: ♾️ {_sc('Lifetime')}"
     return (
-        "✅ Key Activated!\n\n"
+        f"✅ {_sc('Key Activated')}!\n\n"
         f"{expiry_line}\n"
-        "👉 Use /start."
+        f"👉 {_sc('Use')} /start."
     )
 
 def msg_db_selection(files: list, d: dict) -> str:
@@ -1142,14 +1143,19 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════
 #  CATCH-ALL unknown command
 # ══════════════════════════════════════════════════════
+KNOWN_COMMANDS = {
+    "start", "help", "redeem", "status",
+    "createkeys", "bulkkeys", "revokekey",
+    "customname", "syncgithub", "addadmin", "removeadmin",
+}
+
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    d    = load()
-    user = update.effective_user
-    track(user.id, user.username, user.first_name, d)
-    save_local(d)
+    if update.message and update.message.text:
+        cmd = update.message.text.split()[0].lstrip("/").split("@")[0].lower()
+        if cmd in KNOWN_COMMANDS:
+            return  # Real handler will catch it; don't interfere
     await update.message.reply_text(
-        build_welcome(user.first_name, user.username, user.id, d),
-        reply_markup=kb_main(user.id, d),
+        "Unknown command.\n\nUse /help to see available commands or /start to open the menu."
     )
 
 # ══════════════════════════════════════════════════════
@@ -1174,6 +1180,7 @@ def main():
         .build()
     )
 
+    # ── known commands (must be registered before catch-all) ──
     app.add_handler(CommandHandler("start",       start))
     app.add_handler(CommandHandler("help",        help_cmd))
     app.add_handler(CommandHandler("redeem",      redeem))
@@ -1185,8 +1192,17 @@ def main():
     app.add_handler(CommandHandler("syncgithub",  syncgithub))
     app.add_handler(CommandHandler("addadmin",    addadmin))
     app.add_handler(CommandHandler("removeadmin", removeadmin))
+    # ── inline button callbacks ──
     app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # ── catch-all: only fires for commands NOT matched above ──
+    app.add_handler(MessageHandler(
+        filters.COMMAND &
+        ~filters.Regex(
+            r"^/(?:start|help|redeem|status|createkeys|bulkkeys"
+            r"|revokekey|customname|syncgithub|addadmin|removeadmin)(?:@\S+)?(?:\s|$)"
+        ),
+        unknown_command,
+    ))
 
     logger.info("ZEIJIE VIP PREMIUM BOT running...")
     app.run_polling(drop_pending_updates=True)
