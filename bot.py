@@ -71,7 +71,7 @@ WELCOME_LINES = [
 ]
 
 # ══════════════════════════════════════════════════════
-#  GITHUB SYNC
+#  GITHUB SYNC  — fixed: always awaited, never fire-and-forget
 # ══════════════════════════════════════════════════════
 GH_BASE = "https://api.github.com"
 
@@ -82,59 +82,78 @@ def _gh_headers() -> dict:
     }
 
 def _gh_repo() -> str:
+    """Accept both 'user/repo' and full GitHub URL."""
     r = GITHUB_REPO.strip()
     for prefix in ("https://github.com/", "http://github.com/", "github.com/"):
         if r.startswith(prefix):
             r = r[len(prefix):]
     return r.rstrip("/")
 
-async def github_push_file(repo_path: str, local_path: str):
+async def gh_push(repo_path: str, local_path: str) -> bool:
+    """
+    Push a local file to GitHub.
+    Returns True on success, False on failure.
+    Always awaited — never used with create_task so it never silently fails.
+    """
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        return
+        return False
     repo = _gh_repo()
     try:
         with open(local_path, "rb") as f:
             content_b64 = base64.b64encode(f.read()).decode()
         url = f"{GH_BASE}/repos/{repo}/contents/{repo_path}"
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Get current SHA so we can update instead of create
             resp = await client.get(url, headers=_gh_headers(),
                                     params={"ref": GITHUB_BRANCH})
-            sha  = resp.json().get("sha") if resp.status_code == 200 else None
+            sha  = None
+            if resp.status_code == 200:
+                sha = resp.json().get("sha")
+
             payload: dict = {
-                "message": f"auto-update {repo_path}",
+                "message": f"bot: update {repo_path}",
                 "content": content_b64,
                 "branch":  GITHUB_BRANCH,
             }
             if sha:
                 payload["sha"] = sha
+
             r2 = await client.put(url, headers=_gh_headers(), json=payload)
             if r2.status_code in (200, 201):
                 logger.info("GH push OK: %s", repo_path)
+                return True
             else:
-                logger.warning("GH push failed %s: %s", repo_path, r2.text[:200])
+                logger.warning("GH push failed %s: %s", repo_path, r2.text[:300])
+                return False
     except Exception as e:
-        logger.error("GH push error: %s", e)
+        logger.error("GH push error (%s): %s", repo_path, e)
+        return False
 
-async def github_pull_file(repo_path: str, local_path: str):
+async def gh_pull(repo_path: str, local_path: str) -> bool:
+    """Pull a file from GitHub to local. Returns True on success."""
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        return
+        return False
     repo = _gh_repo()
     try:
         url = f"{GH_BASE}/repos/{repo}/contents/{repo_path}"
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url, headers=_gh_headers(),
                                     params={"ref": GITHUB_BRANCH})
             if resp.status_code == 200:
-                content = base64.b64decode(resp.json().get("content", ""))
+                raw     = resp.json().get("content", "")
+                content = base64.b64decode(raw)
                 os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
                 with open(local_path, "wb") as f:
                     f.write(content)
                 logger.info("GH pull OK: %s", repo_path)
+                return True
             else:
-                logger.warning("GH pull skipped %s — status %s",
+                logger.warning("GH pull skipped %s — HTTP %s",
                                repo_path, resp.status_code)
+                return False
     except Exception as e:
-        logger.error("GH pull error: %s", e)
+        logger.error("GH pull error (%s): %s", repo_path, e)
+        return False
 
 # ══════════════════════════════════════════════════════
 #  DATA HELPERS
@@ -148,9 +167,11 @@ _DEFAULT: dict = {
 }
 
 def load() -> dict:
+    """Load data.json — creates safe defaults if missing or corrupt."""
     if not os.path.exists(DATA_FILE):
         _write_default()
-        return _DEFAULT.copy()
+        return {k: (v.copy() if isinstance(v, dict) else list(v))
+                for k, v in _DEFAULT.items()}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             d = json.load(f)
@@ -160,7 +181,8 @@ def load() -> dict:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("data.json load failed (%s) — resetting.", e)
         _write_default()
-        return _DEFAULT.copy()
+        return {k: (v.copy() if isinstance(v, dict) else list(v))
+                for k, v in _DEFAULT.items()}
 
 def _write_default():
     try:
@@ -169,18 +191,23 @@ def _write_default():
     except OSError as e:
         logger.error("Could not create data.json: %s", e)
 
-def save(d: dict):
+def save_local(d: dict):
+    """Save data.json locally (atomic write)."""
     tmp = DATA_FILE + ".tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(d, f, indent=2, ensure_ascii=False)
         os.replace(tmp, DATA_FILE)
     except OSError as e:
-        logger.error("Save failed: %s", e)
+        logger.error("Local save failed: %s", e)
 
-def save_push(d: dict):
-    save(d)
-    asyncio.create_task(github_push_file("data.json", DATA_FILE))
+async def save_and_push(d: dict):
+    """
+    Save locally THEN push to GitHub.
+    Always awaited so GitHub push is never lost.
+    """
+    save_local(d)
+    await gh_push("data.json", DATA_FILE)
 
 def track(uid, username, first_name, d):
     d.setdefault("members", {})[str(uid)] = {
@@ -216,7 +243,7 @@ def has_access(uid, d: dict) -> bool:
     return not is_expired(rd)
 
 # ══════════════════════════════════════════════════════
-#  DATABASE FILE HELPERS — all supported extensions
+#  DATABASE FILE HELPERS
 # ══════════════════════════════════════════════════════
 def get_db_files() -> list:
     try:
@@ -235,12 +262,6 @@ def count_lines(path: str) -> int:
             return sum(1 for _ in f)
     except Exception:
         return 0
-
-def total_db_lines() -> int:
-    total = 0
-    for fname in get_db_files():
-        total += count_lines(os.path.join(DB_FOLDER, fname))
-    return total
 
 def get_display_name(fname: str, d: dict) -> str:
     return d.get("db_names", {}).get(fname, Path(fname).stem)
@@ -275,13 +296,13 @@ def parse_duration(raw: str):
         return None, "Lifetime"
     digits = "".join(c for c in dur if c.isdigit())
     if not digits:
-        raise ValueError(f"Cannot parse: {raw!r}")
+        raise ValueError(f"Cannot parse duration: {raw!r}")
     n = int(digits)
     if "h" in dur:
-        return timedelta(hours=n),   f"{n} hour{'s' if n!=1 else ''}"
+        return timedelta(hours=n),   f"{n} hour{'s' if n != 1 else ''}"
     if "m" in dur and "month" not in dur:
-        return timedelta(minutes=n), f"{n} minute{'s' if n!=1 else ''}"
-    return timedelta(days=n), f"{n} day{'s' if n!=1 else ''}"
+        return timedelta(minutes=n), f"{n} minute{'s' if n != 1 else ''}"
+    return timedelta(days=n), f"{n} day{'s' if n != 1 else ''}"
 
 def expiry_display(exp_iso) -> str:
     if not exp_iso:
@@ -307,19 +328,20 @@ def expiry_display(exp_iso) -> str:
     return f"{abs_time}  ({''.join(parts) or '< 1s'} left)"
 
 # ══════════════════════════════════════════════════════
-#  STYLED KEY MESSAGES  (small caps unicode, no markdown)
+#  STYLED MESSAGES  (small-caps unicode, zero markdown)
 # ══════════════════════════════════════════════════════
+
 def msg_key_generated(key: str, dur_label: str, devices: int) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
         "🎉 ᴋᴇʏ ɢᴇɴᴇʀᴀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!\n\n"
         "🔑 ᴋᴇʏ ᴅᴇᴛᴀɪʟs\n"
-        f"┣ 🎫 ᴀᴄᴄᴇss ᴋᴇʏ  : {key}\n"
-        f"┣ ⏳ ᴠᴀʟɪᴅɪᴛʏ    : 🗓️ {dur_label}\n"
-        f"┣ 👥 ᴍᴀx ᴜsᴇʀs  : {devices}\n"
-        "┣ 📝 sᴛᴀᴛᴜs      : ᴏɴᴇ-ᴛɪᴍᴇ ᴜsᴇ\n"
-        f"┣ 📅 ᴄʀᴇᴀᴛᴇᴅ    : {now}\n\n"
-        "🛡️ sᴇᴄᴜʀɪᴛʏ ɴᴏᴛᴇs\n"
+        f"┣ 🎫 ᴀᴄᴄᴇss ᴋᴇʏ  :  {key}\n"
+        f"┣ ⏳ ᴠᴀʟɪᴅɪᴛʏ    :  🗓 {dur_label}\n"
+        f"┣ 👥 ᴍᴀx ᴜsᴇʀs  :  {devices}\n"
+        "┣ 📝 sᴛᴀᴛᴜs      :  ᴏɴᴇ-ᴛɪᴍᴇ ᴜsᴇ\n"
+        f"┣ 📅 ᴄʀᴇᴀᴛᴇᴅ    :  {now}\n\n"
+        "🛡 sᴇᴄᴜʀɪᴛʏ ɴᴏᴛᴇs\n"
         "┣ ✦ sɪɴɢʟᴇ-ᴀᴄᴛɪᴠᴀᴛɪᴏɴ ᴏɴʟʏ\n"
         "┣ ✦ ᴀᴜᴛᴏ-ᴇxᴘɪʀʏ ᴇɴᴀʙʟᴇᴅ\n"
         "┣ ✦ ɴᴏɴ-ᴛʀᴀɴsғᴇʀᴀʙʟᴇ\n\n"
@@ -328,40 +350,69 @@ def msg_key_generated(key: str, dur_label: str, devices: int) -> str:
     )
 
 def msg_bulk_keys(keys: list, dur_label: str) -> str:
-    now       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    keys_text = "\n".join(
-        f"ᴢᴇɪᴊɪᴇ-ᴘʀᴇᴍɪᴜᴍ-{k.split('-')[-1]}" if k.startswith("ZEIJIE-PREMIUM-") else k
-        for k in keys
-    )
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Convert each key to small-caps style display
+    def to_smallcaps(k: str) -> str:
+        table = str.maketrans(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+            "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘqʀsᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘqʀsᴛᴜᴠᴡxʏᴢ"
+        )
+        return k.translate(table)
+    keys_text = "\n".join(to_smallcaps(k) for k in keys)
     return (
         f"🎉 {len(keys)} Keys Generated Successfully! 🎉\n\n"
         f"{keys_text}\n\n"
-        f"⏳ Validity (each) : ⏱️ {dur_label}\n"
-        "📝 Status          : One-time use\n"
-        f"📅 Created On      : {now}\n\n"
+        f"⏳ Validity (each) :  ⏱ {dur_label}\n"
+        "📝 Status          :  One-time use\n"
+        f"📅 Created On      :  {now}\n\n"
         "✨ Share these keys with your users to grant them access!"
     )
 
-# ══════════════════════════════════════════════════════
-#  STYLED DATABASE SELECTION MESSAGE
-# ══════════════════════════════════════════════════════
+def msg_key_redeemed(key: str, expires_iso) -> str:
+    """Exact format requested for successful redemption."""
+    if expires_iso:
+        expiry_line = f"🔑 Expiry: {expiry_display(expires_iso)}"
+    else:
+        expiry_line = "🔑 Expiry: ♾️ Lifetime"
+    return (
+        "✅ Key Activated!\n\n"
+        f"{expiry_line}\n"
+        "👉 Use /start."
+    )
+
 def msg_db_selection(files: list, d: dict) -> str:
     total = sum(count_lines(os.path.join(DB_FOLDER, f)) for f in files)
-    header = (
+    return (
         "— DATABASE SELECTION —\n\n"
-        f"📊 TOTAL AVAILABLE LINES  : {total:,}\n"
-        f"📄 LINES PER GENERATION   : {LINES_PER_USE}\n"
-        "🔄 AUTO-CLEANUP           : LINES ARE REMOVED\n"
+        f"📊 TOTAL AVAILABLE LINES  :  {total:,}\n"
+        f"📄 LINES PER GENERATION   :  {LINES_PER_USE}\n"
+        "🔄 AUTO-CLEANUP           :  LINES ARE REMOVED\n"
         "   FROM THE SOURCE DATABASE AFTER GENERATION.\n\n"
         "PLEASE SELECT A DATABASE FROM THE OPTIONS BELOW:"
     )
-    return header
+
+def msg_file_caption(disp: str, sent: int, remaining: int) -> str:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        "🔮 ᴘʀᴇᴍɪᴜᴍ ғɪʟᴇ ɢᴇɴᴇʀᴀᴛᴇᴅ!\n\n"
+        "📊 ɢᴇɴᴇʀᴀᴛɪᴏɴ sᴜᴍᴍᴀʀʏ\n"
+        f"┣ 🎮 sᴏᴜʀᴄᴇ     :  {disp.upper()}\n"
+        f"┣ 📄 ʟɪɴᴇs      :  {sent:,}\n"
+        f"┣ 💾 ʀᴇᴍᴀɪɴɪɴɢ  :  {remaining:,} lines\n"
+        f"┣ 🕐 ɢᴇɴᴇʀᴀᴛᴇᴅ  :  {now}\n"
+        "┣ 🧹 ᴄʟᴇᴀɴᴜᴘ    :  ᴅᴏɴᴇ\n\n"
+        "🛡 sᴇᴄᴜʀɪᴛʏ\n"
+        "┣ 🔒 ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇ  :  5 ᴍɪɴᴜᴛᴇs\n"
+        "┣ ⚡ sᴇssɪᴏɴ      :  ᴠᴇʀɪғɪᴇᴅ\n\n"
+        "⬇️ ᴅᴏᴡɴʟᴏᴀᴅ ɪᴍᴍᴇᴅɪᴀᴛᴇʟʏ — ғɪʟᴇ ᴅᴇʟᴇᴛᴇs ɪɴ 5 ᴍɪɴ\n\n"
+        "⭐ ᴛʜᴀɴᴋ ʏᴏᴜ ғᴏʀ ᴜsɪɴɢ ZEIJIE ᴘʀᴇᴍɪᴜᴍ!"
+    )
 
 # ══════════════════════════════════════════════════════
 #  OUTPUT FILE HELPERS
 # ══════════════════════════════════════════════════════
 def output_filename(disp: str) -> str:
-    return f"{OUTPUT_PREFIX}-{disp.upper().replace(' ','_')}.txt"
+    return f"{OUTPUT_PREFIX}-{disp.upper().replace(' ', '_')}.txt"
 
 def file_header(disp: str, lines: int) -> str:
     sep = "=" * 38
@@ -371,23 +422,6 @@ def file_header(disp: str, lines: int) -> str:
         f"Lines     : {lines}\n"
         f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"{sep}\n\n"
-    )
-
-def msg_file_caption(disp: str, sent: int, remaining: int) -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return (
-        "🔮 ᴘʀᴇᴍɪᴜᴍ ғɪʟᴇ ɢᴇɴᴇʀᴀᴛᴇᴅ!\n\n"
-        "📊 ɢᴇɴᴇʀᴀᴛɪᴏɴ sᴜᴍᴍᴀʀʏ\n"
-        f"┣ 🎮 sᴏᴜʀᴄᴇ     : {disp.upper()}\n"
-        f"┣ 📄 ʟɪɴᴇs      : {sent:,}\n"
-        f"┣ 💾 ʀᴇᴍᴀɪɴɪɴɢ  : {remaining:,} lines\n"
-        f"┣ 🕐 ɢᴇɴᴇʀᴀᴛᴇᴅ  : {now}\n"
-        "┣ 🧹 ᴄʟᴇᴀɴᴜᴘ    : ᴅᴏɴᴇ\n\n"
-        "🛡 sᴇᴄᴜʀɪᴛʏ\n"
-        "┣ 🔒 ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇ : 5 ᴍɪɴᴜᴛᴇs\n"
-        "┣ ⚡ sᴇssɪᴏɴ     : ᴠᴇʀɪғɪᴇᴅ\n\n"
-        "⬇️ ᴅᴏᴡɴʟᴏᴀᴅ ɪᴍᴍᴇᴅɪᴀᴛᴇʟʏ — ғɪʟᴇ ᴅᴇʟᴇᴛᴇs ɪɴ 5 ᴍɪɴ\n\n"
-        "⭐ ᴛʜᴀɴᴋ ʏᴏᴜ ғᴏʀ ᴜsɪɴɢ ZEIJIE ᴘʀᴇᴍɪᴜᴍ!"
     )
 
 # ══════════════════════════════════════════════════════
@@ -456,7 +490,7 @@ def kb_contact() -> InlineKeyboardMarkup:
     ])
 
 # ══════════════════════════════════════════════════════
-#  WELCOME TEXT
+#  WELCOME
 # ══════════════════════════════════════════════════════
 ACCESS_DENIED = (
     "Access Denied\n\n"
@@ -486,7 +520,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d    = load()
     user = update.effective_user
     track(user.id, user.username, user.first_name, d)
-    save(d)
+    save_local(d)
     await update.message.reply_text(
         build_welcome(user.first_name, user.username, user.id, d),
         reply_markup=kb_main(user.id, d),
@@ -502,10 +536,10 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_cmds = (
         "Your Commands\n"
         "--------------\n"
-        "/start     - Main menu\n"
-        "/redeem    - Activate a VIP key\n"
-        "/status    - Check your access status\n"
-        "/help      - Show this message\n"
+        "/start       - Main menu\n"
+        "/redeem      - Activate a VIP key\n"
+        "/status      - Check your access status\n"
+        "/help        - Show this message\n"
     )
     admin_cmds = (
         "\nAdmin Commands\n"
@@ -513,14 +547,15 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/createkeys  <users> <dur>      - Create key\n"
         "/bulkkeys    <prefix> <n> <dur> - Bulk keys\n"
         "/revokekey   <key>              - Delete a key\n"
-        "/customname  <file> <n>         - Set DB display name\n"
+        "/customname  <file> <name>      - Set DB display name\n"
         "/syncgithub                     - Pull from GitHub\n"
         "/addadmin    <id>               - Add admin (owner only)\n"
         "/removeadmin <id>               - Remove admin (owner only)\n"
     )
 
-    text = user_cmds + (admin_cmds if is_admin(uid, d) else "")
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        user_cmds + (admin_cmds if is_admin(uid, d) else "")
+    )
 
 # ══════════════════════════════════════════════════════
 #  /redeem <key>
@@ -579,17 +614,11 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "expires":   expires_iso,
         "activated": now.isoformat(),
     }
-    save_push(d)
 
-    await update.message.reply_text(
-        "KEY ACTIVATED\n"
-        "=============\n\n"
-        f"Key      : {key}\n"
-        f"Duration : {dur_label}\n"
-        f"Expires  : {expiry_display(expires_iso)}\n"
-        "Device   : Locked to your account\n\n"
-        "Your access timer has started."
-    )
+    # Save locally AND push to GitHub — awaited so it never silently fails
+    await save_and_push(d)
+
+    await update.message.reply_text(msg_key_redeemed(key, expires_iso))
 
 # ══════════════════════════════════════════════════════
 #  /status
@@ -684,8 +713,8 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "created_by":  str(uid),
         "created_at":  datetime.now().isoformat(),
     }
-    save_push(d)
 
+    await save_and_push(d)
     await update.message.reply_text(msg_key_generated(key, dur_label, devices))
 
 # ══════════════════════════════════════════════════════
@@ -739,8 +768,8 @@ async def bulkkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "created_by":  str(uid),
             "created_at":  now_iso,
         }
-    save_push(d)
 
+    await save_and_push(d)
     await update.message.reply_text(msg_bulk_keys(keys, dur_label))
 
 # ══════════════════════════════════════════════════════
@@ -762,7 +791,7 @@ async def revokekey(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     del d["keys"][key]
     d["redeemed"] = {u: v for u, v in d["redeemed"].items()
                      if v.get("key") != key}
-    save_push(d)
+    await save_and_push(d)
     await update.message.reply_text(f"Key revoked: {key}")
 
 # ══════════════════════════════════════════════════════
@@ -796,7 +825,7 @@ async def customname(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     d.setdefault("db_names", {})[fname] = disp_name
-    save_push(d)
+    await save_and_push(d)
     await update.message.reply_text(
         f"Name set!\nFile : {fname}\nName : {disp_name}"
     )
@@ -817,11 +846,14 @@ async def syncgithub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
     msg = await update.message.reply_text("Syncing from GitHub...")
-    await github_pull_file("data.json", DATA_FILE)
+    ok1 = await gh_pull("data.json", DATA_FILE)
+    ok2 = True
     for fname in get_db_files():
-        await github_pull_file(f"database/{fname}",
-                               os.path.join(DB_FOLDER, fname))
-    await msg.edit_text("Sync complete! Data pulled from GitHub.")
+        r = await gh_pull(f"database/{fname}", os.path.join(DB_FOLDER, fname))
+        if not r:
+            ok2 = False
+    status = "Sync complete!" if (ok1 and ok2) else "Sync done with some errors. Check logs."
+    await msg.edit_text(status)
 
 # ══════════════════════════════════════════════════════
 #  OWNER: /addadmin  /removeadmin
@@ -837,7 +869,7 @@ async def addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target = str(ctx.args[0])
     if target not in [str(a) for a in d["admins"]]:
         d["admins"].append(target)
-        save_push(d)
+        await save_and_push(d)
     await update.message.reply_text(f"Admin added: {target}")
 
 async def removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -851,7 +883,7 @@ async def removeadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target = str(ctx.args[0])
     if target in [str(a) for a in d["admins"]]:
         d["admins"] = [a for a in d["admins"] if str(a) != target]
-        save_push(d)
+        await save_and_push(d)
         await update.message.reply_text(f"Removed: {target}")
     else:
         await update.message.reply_text(f"Not an admin: {target}")
@@ -865,7 +897,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = q.from_user.id
     data = q.data
     track(uid, q.from_user.username, q.from_user.first_name, d)
-    save(d)
+    save_local(d)
     await q.answer()
 
     if data == "home":
@@ -980,7 +1012,6 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 txt = txt[:3800] + "\n\n... truncated"
         await q.edit_message_text(txt, reply_markup=kb_back("admin"))
 
-    # ── DATABASE SELECTION (styled like screenshot) ───────────────
     elif data == "db":
         files = get_db_files()
         if not files:
@@ -993,7 +1024,6 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_back(),
             )
             return
-
         if not has_access(uid, d):
             await q.edit_message_text(
                 "Access Denied\n\n"
@@ -1002,13 +1032,11 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_contact(),
             )
             return
-
         await q.edit_message_text(
             msg_db_selection(files, d),
             reply_markup=kb_db_files(files, d),
         )
 
-    # ── FILE DOWNLOAD ─────────────────────────────────────────────
     elif data.startswith("dbfile:"):
         fname = data.split(":", 1)[1]
 
@@ -1043,8 +1071,9 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             filename=out_name,
             caption=msg_file_caption(disp, lines_to_send, remaining),
         )
+        # Push updated (consumed) database file to GitHub
+        asyncio.create_task(gh_push(f"database/{fname}", fpath))
         asyncio.create_task(_auto_delete(300, sent_msg))
-        asyncio.create_task(github_push_file(f"database/{fname}", fpath))
 
     elif data == "redeem_info":
         await q.edit_message_text(
@@ -1091,10 +1120,10 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         txt = (
             "Your Commands\n"
             "--------------\n"
-            "/start     - Main menu\n"
-            "/redeem    - Activate a key\n"
-            "/status    - Check your access\n"
-            "/help      - Show commands\n"
+            "/start       - Main menu\n"
+            "/redeem      - Activate a key\n"
+            "/status      - Check your access\n"
+            "/help        - Show commands\n"
         )
         if is_admin(uid, d):
             txt += (
@@ -1103,7 +1132,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "/createkeys  <users> <dur>\n"
                 "/bulkkeys    <prefix> <n> <dur>\n"
                 "/revokekey   <key>\n"
-                "/customname  <file> <n>\n"
+                "/customname  <file> <name>\n"
                 "/syncgithub\n"
                 "/addadmin    <id>  (owner only)\n"
                 "/removeadmin <id>  (owner only)\n"
@@ -1117,7 +1146,7 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     d    = load()
     user = update.effective_user
     track(user.id, user.username, user.first_name, d)
-    save(d)
+    save_local(d)
     await update.message.reply_text(
         build_welcome(user.first_name, user.username, user.id, d),
         reply_markup=kb_main(user.id, d),
@@ -1128,11 +1157,10 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════
 async def on_startup(app: Application):
     logger.info("Startup — pulling from GitHub...")
-    await github_pull_file("data.json", DATA_FILE)
+    await gh_pull("data.json", DATA_FILE)
     for fname in get_db_files():
-        await github_pull_file(f"database/{fname}",
-                               os.path.join(DB_FOLDER, fname))
-    load()
+        await gh_pull(f"database/{fname}", os.path.join(DB_FOLDER, fname))
+    load()   # ensure data.json exists locally after pull
     logger.info("Startup sync done.")
 
 # ══════════════════════════════════════════════════════
