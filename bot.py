@@ -6,11 +6,13 @@
 ╚══════════════════════════════════════╝
 """
 
-import os, json, random, string, io, asyncio, logging, base64
+import os, json, random, string, io, asyncio, logging, base64, threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -37,8 +39,12 @@ OUTPUT_PREFIX = "ZEIJIE-VIP-PREMIUM"
 
 # GitHub sync — leave blank ("") to disable
 GITHUB_TOKEN  = "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"
-GITHUB_REPO   = "delenakent19-glitch/VIP-BOT"      # "username/repo-name"  — NOT the full URL
+GITHUB_REPO   = "delenakent19-glitch/VIP-BOT"      # "username/repo-name"
 GITHUB_BRANCH = "main"
+
+# Admin Panel API secret — CHANGE THIS to something strong!
+API_SECRET    = "zeijie-admin-secret-2026"
+API_PORT      = 5000
 
 # All file extensions accepted as database files
 DB_SUPPORTED_EXTS = {
@@ -82,7 +88,6 @@ def _gh_headers() -> dict:
     }
 
 def _gh_repo() -> str:
-    """Accept both 'user/repo' and full GitHub URL."""
     r = GITHUB_REPO.strip()
     for prefix in ("https://github.com/", "http://github.com/", "github.com/"):
         if r.startswith(prefix):
@@ -150,17 +155,19 @@ async def gh_pull(repo_path: str, local_path: str) -> bool:
 #  DATA HELPERS
 # ══════════════════════════════════════════════════════
 _DEFAULT: dict = {
-    "admins":   [],
-    "keys":     {},
-    "members":  {},
-    "redeemed": {},
-    "db_names": {},
+    "admins":      [],
+    "keys":        {},
+    "members":     {},
+    "redeemed":    {},
+    "db_names":    {},
+    "maintenance": False,
+    "maint_msg":   "",
 }
 
 def load() -> dict:
     if not os.path.exists(DATA_FILE):
         _write_default()
-        return {k: (v.copy() if isinstance(v, dict) else list(v))
+        return {k: (v.copy() if isinstance(v, dict) else (list(v) if isinstance(v, list) else v))
                 for k, v in _DEFAULT.items()}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -171,7 +178,7 @@ def load() -> dict:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("data.json load failed (%s) — resetting.", e)
         _write_default()
-        return {k: (v.copy() if isinstance(v, dict) else list(v))
+        return {k: (v.copy() if isinstance(v, dict) else (list(v) if isinstance(v, list) else v))
                 for k, v in _DEFAULT.items()}
 
 def _write_default():
@@ -315,7 +322,6 @@ def expiry_display(exp_iso) -> str:
 # ══════════════════════════════════════════════════════
 #  MESSAGES
 # ══════════════════════════════════════════════════════
-
 def msg_key_generated(key: str, dur_label: str, devices: int) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
@@ -495,9 +501,29 @@ def build_welcome(first_name, username, uid, d) -> str:
     )
 
 # ══════════════════════════════════════════════════════
+#  MAINTENANCE CHECK MIDDLEWARE
+# ══════════════════════════════════════════════════════
+async def check_maintenance(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Returns True if bot is in maintenance and user should be blocked."""
+    d = load()
+    if not d.get("maintenance", False):
+        return False
+    uid = update.effective_user.id if update.effective_user else None
+    if uid and is_admin(uid, d):
+        return False
+    msg = d.get("maint_msg") or "🔧 Bot is temporarily offline for maintenance. Please check back later."
+    if update.message:
+        await update.message.reply_text(msg)
+    elif update.callback_query:
+        await update.callback_query.answer(msg, show_alert=True)
+    return True
+
+# ══════════════════════════════════════════════════════
 #  /start
 # ══════════════════════════════════════════════════════
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await check_maintenance(update, ctx):
+        return
     d    = load()
     user = update.effective_user
     track(user.id, user.username, user.first_name, d)
@@ -511,6 +537,8 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  /help  — role-aware
 # ══════════════════════════════════════════════════════
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await check_maintenance(update, ctx):
+        return
     d   = load()
     uid = update.effective_user.id
 
@@ -532,6 +560,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/syncgithub                     - Pull from GitHub\n"
         "/addadmin    <id>               - Add admin (owner only)\n"
         "/removeadmin <id>               - Remove admin (owner only)\n"
+        "/maintenance on|off [message]   - Toggle maintenance mode\n"
     )
 
     await update.message.reply_text(
@@ -542,6 +571,8 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  /redeem <key>
 # ══════════════════════════════════════════════════════
 async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await check_maintenance(update, ctx):
+        return
     d   = load()
     uid = str(update.effective_user.id)
     track(int(uid), update.effective_user.username,
@@ -603,6 +634,8 @@ async def redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  /status
 # ══════════════════════════════════════════════════════
 async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if await check_maintenance(update, ctx):
+        return
     d   = load()
     uid = str(update.effective_user.id)
     track(int(uid), update.effective_user.username,
@@ -647,7 +680,6 @@ async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  LOADING ANIMATION HELPER
 # ══════════════════════════════════════════════════════
 async def _loading_animation(message) -> None:
-    """Animate a progress sequence then delete the message."""
     steps = [
         "🔄 10% Initializing key engine...",
         "🔄 25% Accessing secure database nodes...",
@@ -720,14 +752,10 @@ async def createkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await save_and_push(d)
 
-    # ── Loading animation ──
     anim = await update.message.reply_text("🔄 10% Initializing key engine...")
     await _loading_animation(anim)
 
-    # ── Key details message ──
     await update.message.reply_text(msg_key_generated(key, dur_label, devices))
-
-    # ── 1-tap copy: key alone in code block ──
     await update.message.reply_text(
         f"📋 Tap to copy key:\n\n`{key}`",
         parse_mode="Markdown"
@@ -787,14 +815,10 @@ async def bulkkeys(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await save_and_push(d)
 
-    # ── Loading animation ──
     anim = await update.message.reply_text("🔄 10% Initializing key engine...")
     await _loading_animation(anim)
 
-    # ── Bulk key details message ──
     await update.message.reply_text(msg_bulk_keys(keys, dur_label))
-
-    # ── 1-tap copy: all keys in one code block ──
     keys_block = "\n".join(keys)
     await update.message.reply_text(
         f"📋 Tap to copy keys:\n\n`{keys_block}`",
@@ -885,6 +909,38 @@ async def syncgithub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(status)
 
 # ══════════════════════════════════════════════════════
+#  ADMIN: /maintenance on|off [message]
+# ══════════════════════════════════════════════════════
+async def maintenance_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    d   = load()
+    uid = update.effective_user.id
+    if not is_admin(uid, d):
+        await update.message.reply_text("Admins only.")
+        return
+    if not ctx.args:
+        status = "ON" if d.get("maintenance") else "OFF"
+        await update.message.reply_text(
+            f"Maintenance is currently: {status}\n\n"
+            "Usage: /maintenance on [message]\n"
+            "       /maintenance off"
+        )
+        return
+    toggle = ctx.args[0].lower()
+    if toggle == "on":
+        msg = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else "🔧 Bot is temporarily offline for maintenance."
+        d["maintenance"] = True
+        d["maint_msg"]   = msg
+        await save_and_push(d)
+        await update.message.reply_text(f"✅ Maintenance mode ENABLED.\nMessage: {msg}")
+    elif toggle == "off":
+        d["maintenance"] = False
+        d["maint_msg"]   = ""
+        await save_and_push(d)
+        await update.message.reply_text("✅ Maintenance mode DISABLED. Bot is back online.")
+    else:
+        await update.message.reply_text("Usage: /maintenance on|off [message]")
+
+# ══════════════════════════════════════════════════════
 #  OWNER: /addadmin  /removeadmin
 # ══════════════════════════════════════════════════════
 async def addadmin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -928,6 +984,12 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     track(uid, q.from_user.username, q.from_user.first_name, d)
     save_local(d)
     await q.answer()
+
+    # Maintenance block for non-admins
+    if d.get("maintenance") and not is_admin(uid, d):
+        msg = d.get("maint_msg") or "🔧 Bot is temporarily offline for maintenance."
+        await q.answer(msg, show_alert=True)
+        return
 
     if data == "home":
         await q.edit_message_text(
@@ -1087,7 +1149,6 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "This database is empty. Choose another.", show_alert=True)
             return
 
-        # ── Database loading animation ──
         db_steps = [
             "🔄 10% Connecting to database...",
             "🔄 25% Accessing secure database nodes...",
@@ -1184,6 +1245,7 @@ async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "/revokekey   <key>\n"
                 "/customname  <file> <n>\n"
                 "/syncgithub\n"
+                "/maintenance on|off [msg]\n"
                 "/addadmin    <id>  (owner only)\n"
                 "/removeadmin <id>  (owner only)\n"
             )
@@ -1196,6 +1258,7 @@ KNOWN_COMMANDS = {
     "start", "help", "redeem", "status",
     "createkeys", "bulkkeys", "revokekey",
     "customname", "syncgithub", "addadmin", "removeadmin",
+    "maintenance",
 }
 
 async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1206,6 +1269,211 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Unknown command.\n\nUse /help to see available commands or /start to open the menu."
     )
+
+# ══════════════════════════════════════════════════════
+#  FLASK API SERVER  (runs in a background thread)
+# ══════════════════════════════════════════════════════
+flask_app = Flask(__name__)
+CORS(flask_app)
+
+def api_auth(req):
+    return req.headers.get("X-Secret") == API_SECRET
+
+@flask_app.route("/api/data")
+def api_get_data():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    d = load()
+    db_files = get_db_files()
+    db_info = []
+    for fname in db_files:
+        fpath = os.path.join(DB_FOLDER, fname)
+        lines = count_lines(fpath)
+        size  = os.path.getsize(fpath)
+        size_str = f"{size/1024:.1f} KB" if size < 1024*1024 else f"{size/1024/1024:.1f} MB"
+        db_info.append({
+            "file":    fname,
+            "display": get_display_name(fname, d),
+            "lines":   lines,
+            "size":    size_str,
+            "status":  "ok"
+        })
+    return jsonify({**d, "db_files": db_info})
+
+@flask_app.route("/api/keys/create", methods=["POST"])
+def api_create_key():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    body    = request.json or {}
+    devices = int(body.get("devices", 1))
+    raw_dur = body.get("duration", "lifetime")
+    try:
+        td, dur_label = parse_duration(raw_dur)
+    except ValueError:
+        return jsonify({"error": "Invalid duration"}), 400
+    key = generate_key()
+    d   = load()
+    d["keys"][key] = {
+        "devices":     devices,
+        "duration":    raw_dur,
+        "used_by":     [],
+        "user_expiry": {},
+        "created_by":  "admin_panel",
+        "created_at":  datetime.now().isoformat(),
+    }
+    save_local(d)
+    return jsonify({"ok": True, "key": key, "duration": dur_label, "devices": devices})
+
+@flask_app.route("/api/keys/bulk", methods=["POST"])
+def api_bulk_keys():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    body    = request.json or {}
+    prefix  = body.get("prefix", "ZEIJIE-PREMIUM")
+    count   = int(body.get("count", 5))
+    raw_dur = body.get("duration", "lifetime")
+    devices = int(body.get("devices", 1))
+    if not 1 <= count <= 100:
+        return jsonify({"error": "Count must be 1-100"}), 400
+    try:
+        td, dur_label = parse_duration(raw_dur)
+    except ValueError:
+        return jsonify({"error": "Invalid duration"}), 400
+    keys    = generate_bulk_keys(prefix, count)
+    now_iso = datetime.now().isoformat()
+    d       = load()
+    for k in keys:
+        d["keys"][k] = {
+            "devices":     devices,
+            "duration":    raw_dur,
+            "used_by":     [],
+            "user_expiry": {},
+            "created_by":  "admin_panel",
+            "created_at":  now_iso,
+        }
+    save_local(d)
+    return jsonify({"ok": True, "keys": keys, "duration": dur_label})
+
+@flask_app.route("/api/keys/revoke", methods=["POST"])
+def api_revoke_key():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    key = (request.json or {}).get("key", "").upper()
+    d   = load()
+    if key not in d["keys"]:
+        return jsonify({"error": "Key not found"}), 404
+    del d["keys"][key]
+    d["redeemed"] = {u: v for u, v in d["redeemed"].items() if v.get("key") != key}
+    save_local(d)
+    return jsonify({"ok": True})
+
+@flask_app.route("/api/keys/revoke-expired", methods=["POST"])
+def api_revoke_expired():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    d      = load()
+    before = len(d["keys"])
+    to_del = [k for k, v in d["keys"].items()
+              if v.get("used_by") and all(
+                  is_expired({"expires": v.get("user_expiry", {}).get(uid)})
+                  for uid in v.get("used_by", [])
+              )]
+    for k in to_del:
+        del d["keys"][k]
+    save_local(d)
+    return jsonify({"ok": True, "removed": before - len(d["keys"])})
+
+@flask_app.route("/api/admins/add", methods=["POST"])
+def api_add_admin():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    uid = str((request.json or {}).get("id", ""))
+    if not uid:
+        return jsonify({"error": "Missing id"}), 400
+    d = load()
+    if uid not in [str(a) for a in d["admins"]]:
+        d["admins"].append(uid)
+        save_local(d)
+    return jsonify({"ok": True})
+
+@flask_app.route("/api/admins/remove", methods=["POST"])
+def api_remove_admin():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    uid = str((request.json or {}).get("id", ""))
+    if uid == str(OWNER_ID):
+        return jsonify({"error": "Cannot remove owner"}), 400
+    d = load()
+    d["admins"] = [a for a in d["admins"] if str(a) != uid]
+    save_local(d)
+    return jsonify({"ok": True})
+
+@flask_app.route("/api/members/ban", methods=["POST"])
+def api_ban_member():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    uid = str((request.json or {}).get("id", ""))
+    d   = load()
+    d["members"].pop(uid, None)
+    d["redeemed"].pop(uid, None)
+    save_local(d)
+    return jsonify({"ok": True})
+
+@flask_app.route("/api/maintenance", methods=["POST"])
+def api_maintenance():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    body    = request.json or {}
+    enabled = bool(body.get("enabled", False))
+    msg     = body.get("message", "🔧 Bot is temporarily offline for maintenance.")
+    d       = load()
+    d["maintenance"] = enabled
+    d["maint_msg"]   = msg if enabled else ""
+    save_local(d)
+    return jsonify({"ok": True, "maintenance": enabled})
+
+@flask_app.route("/api/db/rename", methods=["POST"])
+def api_db_rename():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    body  = request.json or {}
+    fname = body.get("file", "")
+    name  = body.get("name", "")
+    if not fname or not name:
+        return jsonify({"error": "Missing file or name"}), 400
+    d = load()
+    d.setdefault("db_names", {})[fname] = name
+    save_local(d)
+    return jsonify({"ok": True})
+
+@flask_app.route("/api/broadcast", methods=["POST"])
+def api_broadcast():
+    if not api_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.json or {}
+    # Returns the list of user IDs to broadcast to — actual sending done by bot
+    d      = load()
+    target = body.get("target", "all")
+    members  = d.get("members", {})
+    redeemed = d.get("redeemed", {})
+    if target == "active":
+        ids = [uid for uid in members if has_access(int(uid), d)]
+    elif target == "expired":
+        ids = [uid for uid, rd in redeemed.items() if is_expired(rd)]
+    elif target == "admins":
+        ids = [str(a) for a in d.get("admins", [])] + [str(OWNER_ID)]
+    else:
+        ids = list(members.keys())
+    return jsonify({"ok": True, "recipient_ids": ids, "count": len(ids)})
+
+@flask_app.route("/api/health")
+def api_health():
+    return jsonify({"ok": True, "bot": "ZEIJIE VIP", "time": datetime.now().isoformat()})
+
+def run_flask():
+    import logging as lg
+    lg.getLogger("werkzeug").setLevel(lg.ERROR)
+    flask_app.run(host="0.0.0.0", port=API_PORT, debug=False, use_reloader=False)
 
 # ══════════════════════════════════════════════════════
 #  STARTUP SYNC
@@ -1222,6 +1490,11 @@ async def on_startup(app: Application):
 #  MAIN
 # ══════════════════════════════════════════════════════
 def main():
+    # Start Flask API in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Admin API running on port {API_PORT}")
+
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -1229,23 +1502,24 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start",       start))
-    app.add_handler(CommandHandler("help",        help_cmd))
-    app.add_handler(CommandHandler("redeem",      redeem))
-    app.add_handler(CommandHandler("status",      status_cmd))
-    app.add_handler(CommandHandler("createkeys",  createkeys))
-    app.add_handler(CommandHandler("bulkkeys",    bulkkeys))
-    app.add_handler(CommandHandler("revokekey",   revokekey))
-    app.add_handler(CommandHandler("customname",  customname))
-    app.add_handler(CommandHandler("syncgithub",  syncgithub))
-    app.add_handler(CommandHandler("addadmin",    addadmin))
-    app.add_handler(CommandHandler("removeadmin", removeadmin))
+    app.add_handler(CommandHandler("start",        start))
+    app.add_handler(CommandHandler("help",         help_cmd))
+    app.add_handler(CommandHandler("redeem",       redeem))
+    app.add_handler(CommandHandler("status",       status_cmd))
+    app.add_handler(CommandHandler("createkeys",   createkeys))
+    app.add_handler(CommandHandler("bulkkeys",     bulkkeys))
+    app.add_handler(CommandHandler("revokekey",    revokekey))
+    app.add_handler(CommandHandler("customname",   customname))
+    app.add_handler(CommandHandler("syncgithub",   syncgithub))
+    app.add_handler(CommandHandler("maintenance",  maintenance_cmd))
+    app.add_handler(CommandHandler("addadmin",     addadmin))
+    app.add_handler(CommandHandler("removeadmin",  removeadmin))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(
         filters.COMMAND &
         ~filters.Regex(
             r"^/(?:start|help|redeem|status|createkeys|bulkkeys"
-            r"|revokekey|customname|syncgithub|addadmin|removeadmin)(?:@\S+)?(?:\s|$)"
+            r"|revokekey|customname|syncgithub|addadmin|removeadmin|maintenance)(?:@\S+)?(?:\s|$)"
         ),
         unknown_command,
     ))
