@@ -2601,6 +2601,12 @@ async def unknown_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  STARTUP
 # ══════════════════════════════════════════════════════
 async def on_startup(app: Application):
+    # Delete any existing webhook to prevent conflict with polling
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook deleted — polling mode active.")
+    except Exception as e:
+        logger.warning("⚠️ Could not delete webhook: %s", e)
     _get_sb()   # initialise Supabase client early
     d = load()
     logger.info("Bot started. Keys: %d | Redeemed: %d | DBs: %d",
@@ -2648,7 +2654,10 @@ def main():
     ))
 
     logger.info("ZEIJIE VIP PREMIUM BOT running...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 if __name__ == "__main__":
     main()
