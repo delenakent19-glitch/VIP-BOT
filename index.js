@@ -472,12 +472,14 @@ async function processApproval(orderId, adminChatId, msgId) {
   }
 
   const product = db.products[order.productId];
-  const apkDownloadLink = product?.apkDownloadLink || null;
+  const apkDownloadLink   = product?.apkDownloadLink   || null;
+  const containerFileId   = product?.containerFileId   || null;
+  const containerFileName = product?.containerFileName || "container";
   const isModApk = order.category === "modapk";
 
   // Send delivery message to buyer
   if (isModApk && apkDownloadLink) {
-    // Modded APK: send download link
+    // Modded APK: send download link + key
     await bot.sendMessage(order.buyerId,
       `<b>╔══════════════════════╗</b>\n` +
       `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
@@ -493,7 +495,7 @@ async function processApproval(orderId, adminChatId, msgId) {
       HTML
     );
   } else {
-    // Container (or no APK link): send key only
+    // Container: send key message first
     await bot.sendMessage(order.buyerId,
       `<b>╔══════════════════════╗</b>\n` +
       `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
@@ -502,15 +504,26 @@ async function processApproval(orderId, adminChatId, msgId) {
       `<b>━━━━━ 🔑 YOUR KEY 🔑 ━━━━━</b>\n` +
       `<code>${h(key)}</code>\n` +
       `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+      (containerFileId ? `📦 Container file is attached below.\n` : ``) +
       `  ✅ Approved: ${h(phTime(order.approvedAt))}\n\n` +
       `👆 Tap the key above to copy it.\n💙 Thank you for your purchase!`,
       HTML
     );
+    // Auto-send container file if attached
+    if (containerFileId) {
+      await bot.sendDocument(order.buyerId, containerFileId, {
+        caption:
+          `<b>📦 Container — ${h(order.productName)}</b>\n` +
+          `Use this file with your key.`,
+        parse_mode: "HTML"
+      });
+    }
   }
 
   await bot.sendMessage(adminChatId,
     `✅ Delivered to ${h(order.buyerUser)}\n🔑 Key: <code>${h(key)}</code>` +
-    (isModApk && apkDownloadLink ? `\n🤖 APK link sent` : ``),
+    (isModApk && apkDownloadLink ? `\n🤖 APK link sent` : ``) +
+    (!isModApk && containerFileId ? `\n📦 Container file sent` : ``),
     HTML
   );
 }
@@ -606,6 +619,19 @@ app.post("/api/products", async (req, res) => {
     };
     await saveDB(db);
     res.json(db.products[pid]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Store container file_id for a product
+app.put("/api/products/:id/container", async (req, res) => {
+  try {
+    const db = await getDB();
+    const p = db.products[req.params.id];
+    if (!p) return res.status(404).json({ error: "not found" });
+    p.containerFileId   = req.body.containerFileId || null;
+    p.containerFileName = req.body.containerFileName || null;
+    await saveDB(db);
+    res.json(p);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

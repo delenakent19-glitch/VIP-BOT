@@ -658,7 +658,8 @@ function renderProducts() {
           <div class="prod-price">₱${p.price}</div>
           <div class="prod-actions">
             <button class="btn btn-outline btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Keys</button>
-            <button class="btn btn-outline btn-sm" onclick="openApkModal('${p.id}','${esc(p.name)}')" title="Set Modded APK download link" style="${p.apkDownloadLink?'color:var(--green);border-color:rgba(34,211,165,.3)':''}">${p.apkDownloadLink?'🤖 APK ✓':'🤖 APK'}</button>
+            <button class="btn btn-outline btn-sm" onclick="openContainerModal('${p.id}','${esc(p.name)}')" title="Upload Container file" style="${p.containerFileId?'color:var(--cyan);border-color:rgba(34,211,238,.3)':''}">${p.containerFileId?'📦 ✓':'📦 Container'}</button>
+            <button class="btn btn-outline btn-sm" onclick="openApkModal('${p.id}','${esc(p.name)}')" title="Set Modded APK download link" style="${p.apkDownloadLink?'color:var(--green);border-color:rgba(34,211,165,.3)':''}">${p.apkDownloadLink?'🤖 ✓':'🤖 APK'}</button>
             <button class="btn btn-outline btn-sm" onclick="toggleProd('${p.id}',${!isActive})" title="${isActive?'Hide from bot':'Show in bot'}">${isActive?'🙈':'👁'}</button>
             <button class="btn btn-danger  btn-sm" onclick="delProd('${p.id}')">🗑</button>
           </div>
@@ -680,7 +681,106 @@ async function toggleProd(id, active) {
   catch { showToast("❌ Failed."); }
 }
 
-function openApkModal(pid, pname) {
+function openContainerModal(pid, pname) {
+  const prod = products.find(p=>p.id===pid) || {};
+  document.getElementById("modal").style.display="flex";
+  const inn = document.getElementById("modal-inner");
+  inn.innerHTML=`
+    <div class="modal-title">📦 Container File — ${esc(pname)}</div>
+    <p style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.6">
+      Upload the container file for this product. It will be <b style="color:var(--text)">auto-delivered to buyers who choose Container</b> after their order is approved.
+    </p>
+    ${prod.containerFileId ? `
+    <div style="background:rgba(34,211,238,.07);border:1px solid rgba(34,211,238,.2);border-radius:9px;padding:12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+      <div style="font-size:22px">📦</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600;color:var(--cyan)">Container Attached</div>
+        <div style="font-size:11px;color:var(--muted2);font-family:'JetBrains Mono',monospace;margin-top:2px">${esc(prod.containerFileName||"container file")}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" style="margin-left:auto;flex-shrink:0" onclick="removeContainer('${pid}')">🗑 Remove</button>
+    </div>` : `
+    <div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2);border-radius:9px;padding:12px;margin-bottom:12px;font-size:12px;color:var(--yellow)">
+      ⚠️ No container file uploaded yet.
+    </div>`}
+    <div style="background:rgba(34,211,238,.05);border:1px solid rgba(34,211,238,.15);border-radius:9px;padding:12px;margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--cyan);margin-bottom:8px">📤 Upload Container File</div>
+      <input type="file" id="container-file-input" style="display:none" onchange="uploadContainerFile('${pid}',this)"/>
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('container-file-input').click()">📁 Choose File</button>
+      <span id="container-upload-status" style="font-size:11px;color:var(--muted2);margin-left:8px;font-family:'JetBrains Mono',monospace"></span>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-accent" id="container-save-btn" onclick="saveContainer('${pid}')" disabled>💾 Save Container</button>
+    </div>`;
+}
+
+async function uploadContainerFile(pid, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById("container-upload-status");
+  const saveBtn = document.getElementById("container-save-btn");
+
+  const adminId = localStorage.getItem("kb_admin_id");
+  if (!adminId || !TOKEN) {
+    status.textContent = "❌ Not connected — reconnect first.";
+    status.style.color = "var(--red)";
+    return;
+  }
+
+  status.textContent = "⏳ Uploading...";
+  status.style.color = "var(--yellow)";
+  saveBtn.disabled = true;
+
+  try {
+    const formData = new FormData();
+    formData.append("chat_id", adminId);
+    formData.append("document", file, file.name);
+    formData.append("caption", `📦 Container uploaded via admin panel\nProduct: ${pid}`);
+
+    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendDocument`, {
+      method: "POST", body: formData
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.description || "Upload failed");
+
+    const fileId   = d.result.document.file_id;
+    const fileName = d.result.document.file_name || file.name;
+
+    // Store in hidden fields
+    saveBtn.dataset.fileId   = fileId;
+    saveBtn.dataset.fileName = fileName;
+    saveBtn.disabled = false;
+
+    status.textContent = `✅ Uploaded: ${fileName} — Click Save.`;
+    status.style.color = "var(--green)";
+  } catch(e) {
+    status.textContent = "❌ " + e.message;
+    status.style.color = "var(--red)";
+  }
+}
+
+async function saveContainer(pid) {
+  const saveBtn = document.getElementById("container-save-btn");
+  const containerFileId   = saveBtn.dataset.fileId;
+  const containerFileName = saveBtn.dataset.fileName || "container";
+  if (!containerFileId) { showToast("⚠️ Upload a file first."); return; }
+  try {
+    await af("/products/"+pid+"/container","PUT",{containerFileId, containerFileName});
+    showToast("✅ Container saved! Auto-delivered to Container buyers after approval.");
+    closeModal(); await loadAll();
+  } catch { showToast("❌ Failed."); }
+}
+
+async function removeContainer(pid) {
+  if (!confirm("Remove container file from this product?")) return;
+  try {
+    await af("/products/"+pid+"/container","PUT",{containerFileId:null, containerFileName:null});
+    showToast("🗑️ Container removed.");
+    closeModal(); await loadAll();
+  } catch { showToast("❌ Failed."); }
+}
+
+
   const prod = products.find(p=>p.id===pid) || {};
   document.getElementById("modal").style.display="flex";
   const inn = document.getElementById("modal-inner");
@@ -767,13 +867,13 @@ function renderKeys() {
           <div>
             <div class="card-title">${p.emoji||"🔑"} ${esc(p.name)} <span style="color:var(--muted);font-size:10px;font-weight:400">(${stockCount} keys)</span></div>
             <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:2px">₱${p.price}
-              ${p.apkDownloadLink
-                ? ` &nbsp;·&nbsp; <span style="color:var(--green)">🤖 APK link set</span>`
-                : ` &nbsp;·&nbsp; <span style="color:var(--muted)">🤖 No APK link</span>`}
+              &nbsp;·&nbsp; <span style="${p.containerFileId?'color:var(--cyan)':'color:var(--muted)'}">📦 ${p.containerFileId?'Container ✓':'No Container'}</span>
+              &nbsp;·&nbsp; <span style="${p.apkDownloadLink?'color:var(--green)':'color:var(--muted)'}">🤖 ${p.apkDownloadLink?'APK ✓':'No APK'}</span>
             </div>
           </div>
           <div style="display:flex;gap:5px">
             <button class="btn btn-accent btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Add</button>
+            <button class="btn btn-outline btn-sm" style="${p.containerFileId?'color:var(--cyan);border-color:rgba(34,211,238,.3)':''}" onclick="openContainerModal('${p.id}','${esc(p.name)}')">${p.containerFileId?'📦 ✓':'📦 Container'}</button>
             <button class="btn btn-outline btn-sm" style="${p.apkDownloadLink?'color:var(--green);border-color:rgba(34,211,165,.3)':''}" onclick="openApkModal('${p.id}','${esc(p.name)}')">${p.apkDownloadLink?'🤖 ✓':'🤖 APK'}</button>
             <button class="btn btn-danger btn-sm" onclick="clearKeys('${p.id}')">Clear</button>
           </div>
