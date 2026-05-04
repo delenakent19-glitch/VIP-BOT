@@ -52,13 +52,21 @@ bot.onText(/\/start/, async (msg) => {
   const name   = msg.from.first_name || "there";
   try {
     await bot.sendMessage(chatId,
-      `👋 Hello *${escMd(name)}*\\!\n\nWelcome to our *Key Shop* 🔑\n\nUse the menu below to browse and buy\\.`,
+      `🎮 *Hello, ${escMd(name)}!*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `Welcome to *Zeijie Order Bot* —\n` +
+      `your trusted store for premium game keys\.\n\n` +
+      `✅ Instant key delivery after approval\n` +
+      `💳 GCash payment accepted\n` +
+      `⚡ Fast, secure & reliable\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `Tap *Shop Now* to browse available keys\.`,
       {
         parse_mode: "MarkdownV2",
         reply_markup: {
           keyboard: [
-            [{ text: "🛒 Buy Key" }, { text: "📦 My Orders" }],
-            [{ text: "ℹ️ Help" }]
+            [{ text: "🛒 Shop Now" }, { text: "📦 My Orders" }],
+            [{ text: "ℹ️ How It Works" }]
           ],
           resize_keyboard: true
         }
@@ -73,13 +81,20 @@ bot.onText(/\/help/, (msg) => sendHelp(msg.chat.id));
 async function sendHelp(chatId) {
   try {
     await bot.sendMessage(chatId,
-      "🆘 *Help*\n\n" +
-      "1\\. Press *🛒 Buy Key* to see products\n" +
-      "2\\. Select a product and follow payment instructions\n" +
-      "3\\. Send your GCash payment screenshot\n" +
-      "4\\. Wait for admin approval\n" +
-      "5\\. Your key will be sent automatically 🔑\n\n" +
-      "Questions? Contact the admin\\.",
+      `ℹ️ *How It Works*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `*Step 1* — Browse 🛒\n` +
+      `Tap *Shop Now* and pick your product\.\n\n` +
+      `*Step 2* — Pay 💳\n` +
+      `Send payment via *GCash* to the number shown\.\n\n` +
+      `*Step 3* — Screenshot 📸\n` +
+      `Send your payment screenshot in this chat\.\n\n` +
+      `*Step 4* — Wait ⏳\n` +
+      `Admin reviews within *5 minutes* on average\.\n\n` +
+      `*Step 5* — Receive 🔑\n` +
+      `Your key will be delivered here automatically\!\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `Need help\? Contact the admin directly\.`,
       { parse_mode: "MarkdownV2" }
     );
   } catch (e) { console.error("help error:", e.message); }
@@ -91,7 +106,12 @@ async function showProducts(chatId) {
     const db = await getDB();
     const products = Object.values(db.products).filter(p => p.active);
     if (products.length === 0) {
-      return bot.sendMessage(chatId, "😔 No products available right now\\. Check back soon\\!", { parse_mode: "MarkdownV2" });
+      return bot.sendMessage(chatId,
+        `⚠️ *No Products Available*\n\n` +
+        `We are currently restocking\.\n` +
+        `Please check back soon\!`,
+        { parse_mode: "MarkdownV2" }
+      );
     }
 
     // Group by category
@@ -105,7 +125,7 @@ async function showProducts(chatId) {
     // Build inline keyboard with category headers
     const inline_keyboard = [];
     for (const [cat, items] of Object.entries(grouped)) {
-      inline_keyboard.push([{ text: `🎮 ── ${cat} ──`, callback_data: "noop" }]);
+      inline_keyboard.push([{ text: `┌─ 🎮  ${cat}  ─┐`, callback_data: "noop" }]);
       for (const p of items) {
         inline_keyboard.push([{
           text: `${p.emoji || "🔑"} ${p.name} — ₱${p.price}`,
@@ -129,8 +149,8 @@ bot.on("message", async (msg) => {
   if (msg.forward_from || msg.forward_from_chat) return;
 
   try {
-    if (text === "🛒 Buy Key")  return await showProducts(chatId);
-    if (text === "ℹ️ Help")    return await sendHelp(chatId);
+    if (text === "🛒 Shop Now" || text === "🛒 Buy Key")  return await showProducts(chatId);
+    if (text === "ℹ️ How It Works" || text === "ℹ️ Help") return await sendHelp(chatId);
 
     if (text === "📦 My Orders") {
       const db = await getDB();
@@ -139,9 +159,14 @@ bot.on("message", async (msg) => {
         .slice(-5).reverse();
 
       if (!myOrders.length) {
-        return bot.sendMessage(chatId, "You have no orders yet\\. Use *🛒 Buy Key* to get started\\!", { parse_mode: "MarkdownV2" });
+        return bot.sendMessage(chatId,
+          `📭 *No Orders Yet*\n\n` +
+          `You have not placed any orders\.\n` +
+          `Tap *Shop Now* to browse products\!`,
+          { parse_mode: "MarkdownV2" }
+        );
       }
-      let reply = "📦 *Your recent orders:*\n\n";
+      let reply = `📦 *My Orders*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
       for (const o of myOrders) {
         const icon = o.status === "approved" ? "✅" : o.status === "rejected" ? "❌" : "⏳";
         reply += `${icon} *${escMd(o.productName)}* — ₱${o.amount}\n`;
@@ -158,7 +183,12 @@ bot.on("message", async (msg) => {
       if (msg.photo || msg.document) {
         return await handlePayment(msg, state);
       } else {
-        return bot.sendMessage(chatId, "📸 Please send your *payment screenshot* as a photo\\.", { parse_mode: "MarkdownV2" });
+        return bot.sendMessage(chatId,
+          `📸 *Screenshot Required*\n\n` +
+          `Please send your *GCash payment screenshot*\n` +
+          `as a photo to complete your order\.`,
+          { parse_mode: "MarkdownV2" }
+        );
       }
     }
   } catch (e) { console.error("message error:", e.message); }
@@ -183,7 +213,9 @@ bot.on("callback_query", async (query) => {
       const keysLeft = (db.keys[pid] || []).length;
       if (keysLeft === 0) {
         return bot.sendMessage(chatId,
-          `😔 *${escMd(product.name)}* is out of stock\\! Please try again later\\.`,
+          `🚫 *Out of Stock*\n\n` +
+          `*${escMd(product.name)}* is currently unavailable\.\n` +
+          `Please try another product or check back later\.`,
           { parse_mode: "MarkdownV2" }
         );
       }
@@ -192,15 +224,19 @@ bot.on("callback_query", async (query) => {
       await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: msgId }).catch(() => {});
 
       await bot.sendMessage(chatId,
-        `✅ Great choice\\!\n\n` +
-        `🔑 *${escMd(product.name)}*\n` +
+        `🛒 *Order Summary*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🎮 *${escMd(product.name)}*\n` +
         `💰 Price: *₱${product.price}*\n` +
-        `📦 Stock: ${keysLeft} available\n\n` +
-        `*Payment Instructions:*\n` +
-        `Send *₱${product.price}* via GCash to:\n` +
-        `📱 \`${escMd(process.env.GCASH_NUMBER || "09XX-XXX-XXXX")}\`\n` +
-        `👤 ${escMd(process.env.GCASH_NAME || "Admin")}\n\n` +
-        `📸 After paying, send your *screenshot here*\\.`,
+        `📦 Stock: ${keysLeft} key${keysLeft !== 1 ? "s" : ""} available\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💳 *Payment Instructions*\n\n` +
+        `Send *₱${product.price}* via GCash to:\n\n` +
+        `📱 Number: \`${escMd(process.env.GCASH_NUMBER || "09XX-XXX-XXXX")}\`\n` +
+        `👤 Name: *${escMd(process.env.GCASH_NAME || "Admin")}*\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📸 Send your *payment screenshot* here\.\n` +
+        `Your key will be delivered after verification\.`,
         { parse_mode: "MarkdownV2" }
       );
     }
@@ -243,18 +279,26 @@ async function handlePayment(msg, state) {
   await saveDB(db);
 
   await bot.sendMessage(chatId,
-    `✅ *Payment received\\!*\n\n` +
-    `Your order \`${escMd(orderId)}\` is under review\\.\n` +
-    `You\\'ll receive your key shortly\\! 🔑`,
+    `✅ *Payment Received\!*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Your order has been submitted\.\n\n` +
+    `📋 Order ID: \`${escMd(orderId)}\`\n` +
+    `⏳ Status: *Under Review*\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `You will receive your key once approved\.\n` +
+    `Average wait time: *under 5 minutes*\.`,
     { parse_mode: "MarkdownV2" }
   );
 
   const adminMsg =
-    `💰 *NEW ORDER REQUEST*\n\n` +
-    `👤 User: ${escMd(order.buyerUser)}\n` +
+    `🔔 *NEW ORDER*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `👤 Buyer: ${escMd(order.buyerUser)}\n` +
     `🆔 User ID: \`${chatId}\`\n` +
-    `📦 Product: ${escMd(product.name)}\n` +
-    `💵 AMOUNT: ₱${product.price}\n` +
+    `🎮 Product: *${escMd(product.name)}*\n` +
+    `💰 Amount: *₱${product.price}*\n` +
+    `📋 Order ID: \`${escMd(orderId)}\`\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
     `📋 Order ID: \`${escMd(orderId)}\``;
 
   const keyboard = {
@@ -311,10 +355,14 @@ async function processApproval(orderId, adminChatId, msgId) {
   }
 
   await bot.sendMessage(order.buyerId,
-    `🎉 *Your order has been approved\\!*\n\n` +
-    `Here is your key for *${escMd(order.productName)}*:\n\n` +
+    `✅ *Order Approved\!*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Your key for *${escMd(order.productName)}* is ready\!\n\n` +
+    `🔑 *Your Key:*\n` +
     `\`${escMd(key)}\`\n\n` +
-    `Tap the code above to copy it\\. Thank you\\! 🙏`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `Tap the key above to copy it\.\n` +
+    `Thank you for your purchase\! 🙏`,
     { parse_mode: "MarkdownV2" }
   );
 
@@ -343,9 +391,13 @@ async function processRejection(orderId, adminChatId, msgId) {
   }
 
   await bot.sendMessage(order.buyerId,
-    `❌ *Your order was rejected\\.*\n\n` +
-    `Order: \`${escMd(orderId)}\`\n\n` +
-    `If you believe this is a mistake, please contact support\\.`,
+    `❌ *Order Declined*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Your payment could not be verified\.\n\n` +
+    `📋 Order ID: \`${escMd(orderId)}\`\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `If you believe this is an error,\n` +
+    `contact support with your payment screenshot\.`,
     { parse_mode: "MarkdownV2" }
   );
 }
