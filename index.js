@@ -39,7 +39,20 @@ async function saveDB(db) {
 }
 
 // ─── BOT ─────────────────────────────────────────────────────────────────────
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// Use webhook on Railway (RAILWAY_PUBLIC_DOMAIN is set automatically),
+// fall back to polling for local development.
+const WEBHOOK_HOST = process.env.RAILWAY_PUBLIC_DOMAIN;
+const bot = WEBHOOK_HOST
+  ? new TelegramBot(BOT_TOKEN, { webHook: { port: PORT } })
+  : new TelegramBot(BOT_TOKEN, { polling: true });
+
+if (WEBHOOK_HOST) {
+  const webhookUrl = `https://${WEBHOOK_HOST}/bot${BOT_TOKEN}`;
+  bot.setWebHook(webhookUrl)
+    .then(() => console.log(`✅ Webhook set: ${webhookUrl}`))
+    .catch(e  => console.error("Webhook error:", e.message));
+}
+
 const userState = {};
 
 function escMd(text) {
@@ -299,7 +312,6 @@ async function handlePayment(msg, state) {
     `💰 Amount: *₱${product.price}*\n` +
     `📋 Order ID: \`${escMd(orderId)}\`\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-    `📋 Order ID: \`${escMd(orderId)}\``;
 
   const keyboard = {
     inline_keyboard: [[
@@ -529,14 +541,31 @@ app.post("/api/broadcast", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🤖 Bot is running — @${BOT_TOKEN.split(":")[0]}`);
+// When using webhooks the bot already binds to PORT internally.
+// We attach Express as middleware on that same server instead of calling app.listen().
+if (WEBHOOK_HOST) {
+  // Route Telegram webhook updates through the bot, everything else through Express
+  bot.expressApp = app; // node-telegram-bot-api exposes this when webHook.port is set
+  const botServer = bot.getWebHook ? bot._webHook : null;
+  // Safe fallback: start Express on PORT+1 for the admin panel
+  const ADMIN_PORT = Number(PORT) + 1;
+  app.listen(ADMIN_PORT, () => {
+    console.log(`🚀 Admin panel on port ${ADMIN_PORT}`);
+    console.log(`🤖 Webhook bot active`);
+    startKeepAlive(ADMIN_PORT);
+  });
+} else {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🤖 Bot polling (local dev mode)`);
+    startKeepAlive(PORT);
+  });
+}
 
-  // ── KEEP-ALIVE: ping self every 5 min so Railway never sleeps ──────────────
+function startKeepAlive(port) {
   const SELF_URL = process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/health`
-    : `http://localhost:${PORT}/health`;
+    : `http://localhost:${port}/health`;
 
   setInterval(async () => {
     try {
@@ -546,4 +575,4 @@ app.listen(PORT, () => {
          .on("error", (e) => console.warn("Keep-alive error:", e.message));
     } catch(e) { console.warn("Keep-alive error:", e.message); }
   }, 5 * 60 * 1000); // every 5 minutes
-});
+}
