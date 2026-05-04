@@ -781,6 +781,7 @@ async function removeContainer(pid) {
 }
 
 
+function openApkModal(pid, pname) {
   const prod = products.find(p=>p.id===pid) || {};
   document.getElementById("modal").style.display="flex";
   const inn = document.getElementById("modal-inner");
