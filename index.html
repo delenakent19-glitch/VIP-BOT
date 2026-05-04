@@ -417,11 +417,16 @@ async function doConnect(silent=false) {
   }
 }
 
-function launchApp(info) {
+async function launchApp(info) {
   document.getElementById("login-screen").style.display="none";
   document.getElementById("app").style.display="block";
   document.getElementById("bot-uname").textContent = "@"+info.username;
   document.title = "Admin — @"+info.username;
+  // Fetch real ADMIN_ID from server so APK uploads go to the right chat
+  try {
+    const bi = await af("/botinfo");
+    if (bi.adminId) localStorage.setItem("kb_admin_id", bi.adminId);
+  } catch {}
   refreshT = setInterval(loadAll, 8000);
 }
 
@@ -689,14 +694,22 @@ async function uploadApkFile(pid, input) {
   const file = input.files[0];
   if (!file) return;
   const status = document.getElementById("apk-upload-status");
-  status.textContent = "Uploading...";
+
+  const adminId = localStorage.getItem("kb_admin_id");
+  if (!adminId) {
+    status.textContent = "❌ Admin ID not loaded yet — try reconnecting.";
+    status.style.color = "var(--red)";
+    return;
+  }
+
+  status.textContent = "⏳ Uploading...";
   status.style.color = "var(--yellow)";
   try {
-    // Upload file to Telegram using sendDocument
     const formData = new FormData();
-    formData.append("chat_id", localStorage.getItem("kb_admin_id") || "");
+    formData.append("chat_id", adminId);
     formData.append("document", file, file.name);
-    formData.append("caption", `APK upload for product: ${pid}`);
+    formData.append("caption", `📦 APK uploaded via admin panel
+Product ID: ${pid}`);
     const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendDocument`, {
       method: "POST", body: formData
     });

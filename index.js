@@ -513,7 +513,7 @@ app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime
 app.get("/api/botinfo", async (req, res) => {
   try {
     const info = await bot.getMe();
-    res.json({ ok: true, username: info.username, name: info.first_name, id: info.id });
+    res.json({ ok: true, username: info.username, name: info.first_name, id: info.id, adminId: ADMIN_ID });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
