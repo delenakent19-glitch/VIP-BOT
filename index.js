@@ -85,7 +85,7 @@ async function sendHelp(chatId) {
   } catch (e) { console.error("help error:", e.message); }
 }
 
-// Show products
+// Show products grouped by category
 async function showProducts(chatId) {
   try {
     const db = await getDB();
@@ -93,13 +93,30 @@ async function showProducts(chatId) {
     if (products.length === 0) {
       return bot.sendMessage(chatId, "😔 No products available right now\\. Check back soon\\!", { parse_mode: "MarkdownV2" });
     }
-    const buttons = products.map(p => ([{
-      text: `${p.emoji || "🔑"} ${p.name} — ₱${p.price}`,
-      callback_data: `buy_${p.id}`
-    }]));
+
+    // Group by category
+    const grouped = {};
+    for (const p of products) {
+      const cat = p.category || "Other";
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(p);
+    }
+
+    // Build inline keyboard with category headers
+    const inline_keyboard = [];
+    for (const [cat, items] of Object.entries(grouped)) {
+      inline_keyboard.push([{ text: `🎮 ── ${cat} ──`, callback_data: "noop" }]);
+      for (const p of items) {
+        inline_keyboard.push([{
+          text: `${p.emoji || "🔑"} ${p.name} — ₱${p.price}`,
+          callback_data: `buy_${p.id}`
+        }]);
+      }
+    }
+
     await bot.sendMessage(chatId, "🛍️ *Choose a product:*", {
       parse_mode: "MarkdownV2",
-      reply_markup: { inline_keyboard: buttons }
+      reply_markup: { inline_keyboard }
     });
   } catch (e) { console.error("showProducts error:", e.message); }
 }
@@ -155,7 +172,9 @@ bot.on("callback_query", async (query) => {
   await bot.answerCallbackQuery(query.id).catch(() => {});
 
   try {
-    if (data.startsWith("buy_")) {
+    if (data === "noop") return; // category header tap — do nothing
+
+  if (data.startsWith("buy_")) {
       const pid = data.replace("buy_", "");
       const db  = await getDB();
       const product = db.products[pid];
@@ -394,10 +413,10 @@ app.get("/api/products", async (req, res) => {
 app.post("/api/products", async (req, res) => {
   try {
     const db = await getDB();
-    const { name, price, emoji, description } = req.body;
+    const { name, price, emoji, description, category } = req.body;
     if (!name || !price) return res.status(400).json({ error: "name and price required" });
     const pid = `PROD-${Date.now()}`;
-    db.products[pid] = { id: pid, name, price: Number(price), emoji: emoji || "🔑", description: description || "", active: true };
+    db.products[pid] = { id: pid, name, price: Number(price), emoji: emoji || "🔑", description: description || "", category: category || "Other", active: true };
     await saveDB(db);
     res.json(db.products[pid]);
   } catch (e) { res.status(500).json({ error: e.message }); }

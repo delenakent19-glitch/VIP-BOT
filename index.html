@@ -158,6 +158,9 @@ html,body{height:100%;font-family:'Space Grotesk',sans-serif;background:var(--bg
 
 /* server offline warning bar */
 .offline-bar{background:rgba(244,63,110,.1);border:1px solid rgba(244,63,110,.2);border-radius:9px;padding:12px 14px;font-size:12px;color:var(--red);margin-bottom:4px;display:none}
+.aud-btn{padding:7px 12px;font-size:11px;font-weight:600;border-radius:7px;border:1px solid var(--border2);background:transparent;color:var(--muted2);cursor:pointer;font-family:'Space Grotesk',sans-serif;transition:all .15s}
+.aud-btn.active{background:rgba(99,102,241,.15);color:var(--accent2);border-color:rgba(99,102,241,.3)}
+.aud-btn:active{transform:scale(.96)}
 .offline-bar b{color:#fff}
 
 @media(max-width:640px){
@@ -270,15 +273,81 @@ html,body{height:100%;font-family:'Space Grotesk',sans-serif;background:var(--bg
     </div>
 
     <div id="page-broadcast" class="content" style="display:none">
+      <!-- Stats row -->
+      <div class="stats-row">
+        <div class="stat sp"><div class="stat-top"><div class="stat-lbl">Recipients</div><div class="stat-ico">👥</div></div><div class="stat-val" id="bc-count">0</div><div class="stat-sub">unique buyers</div></div>
+        <div class="stat sg"><div class="stat-top"><div class="stat-lbl">Last Sent</div><div class="stat-ico">📡</div></div><div class="stat-val" id="bc-last" style="font-size:13px;margin-top:4px">—</div><div class="stat-sub">broadcast</div></div>
+      </div>
+
+      <!-- Compose card -->
       <div class="card">
-        <div class="card-head"><div class="card-title">📡 Broadcast</div></div>
-        <p style="font-size:12px;color:var(--muted2);margin-bottom:12px">Send message directly to all buyers via Bot Token — works even if server is offline.</p>
-        <div class="fg" style="margin-bottom:10px">
-          <label>Message</label>
-          <textarea class="ftextarea" id="bmsg" rows="5" placeholder="Type message..." oninput="bpreview(this)"></textarea>
+        <div class="card-head">
+          <div class="card-title">📡 Compose Broadcast</div>
+          <div style="display:flex;gap:5px">
+            <button class="btn btn-outline btn-sm" onclick="insertTemplate('restock')">📦 Restock</button>
+            <button class="btn btn-outline btn-sm" onclick="insertTemplate('promo')">🔥 Promo</button>
+          </div>
         </div>
-        <div id="bprev" style="display:none;background:rgba(7,8,15,.6);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;color:#a0a5cc;line-height:1.7"></div>
-        <button class="btn btn-accent" style="width:100%" onclick="sendBcast()">📡 Send via Telegram</button>
+
+        <!-- Audience selector -->
+        <div style="margin-bottom:14px">
+          <div style="font-size:10px;font-weight:700;color:var(--muted2);letter-spacing:.7px;text-transform:uppercase;margin-bottom:8px">AUDIENCE</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="aud-btn active" onclick="setAud(this,'all')">👥 All Buyers</button>
+            <button class="aud-btn" onclick="setAud(this,'pending')">⏳ Pending</button>
+            <button class="aud-btn" onclick="setAud(this,'approved')">✅ Approved</button>
+          </div>
+        </div>
+
+        <!-- Message box -->
+        <div class="fg" style="margin-bottom:10px">
+          <label>Message <span id="bc-charcount" style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">0 / 4096</span></label>
+          <textarea class="ftextarea" id="bmsg" rows="6"
+            placeholder="Type your broadcast message here...&#10;&#10;Supports plain text. Emojis welcome! 🎮🔑"
+            oninput="bpreview(this);updateCharCount(this)"></textarea>
+        </div>
+
+        <!-- Live preview -->
+        <div id="bprev" style="display:none;background:rgba(7,8,15,.7);border:1px solid var(--border2);border-radius:10px;padding:14px;margin-bottom:14px">
+          <div style="font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:1px;margin-bottom:8px">📱 PREVIEW</div>
+          <div style="display:flex;gap:10px;align-items:flex-end">
+            <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#a78bfa);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px">🤖</div>
+            <div style="background:#1e2035;border-radius:12px 12px 12px 4px;padding:10px 13px;max-width:85%">
+              <div id="bprev-text" style="font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word"></div>
+              <div style="font-size:9px;color:var(--muted);margin-top:4px;text-align:right">${new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'})}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Send button -->
+        <button class="btn btn-accent" id="bc-btn" style="width:100%;padding:13px;font-size:14px" onclick="sendBcast()">
+          📡 Send Broadcast
+        </button>
+        <div id="bc-progress" style="display:none;margin-top:12px">
+          <div style="height:4px;background:var(--border);border-radius:4px;overflow:hidden">
+            <div id="bc-bar" style="height:100%;background:linear-gradient(90deg,var(--accent),var(--green));border-radius:4px;width:0%;transition:width .3s"></div>
+          </div>
+          <div id="bc-status" style="font-size:11px;color:var(--muted2);text-align:center;margin-top:6px;font-family:'JetBrains Mono',monospace"></div>
+        </div>
+      </div>
+
+      <!-- History placeholder -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">📋 Broadcast Tips</div></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:rgba(99,102,241,.06);border-radius:8px;border:1px solid rgba(99,102,241,.12)">
+            <div style="font-size:18px">📦</div>
+            <div><div style="font-size:12px;font-weight:600;color:var(--text)">Restock Alert</div><div style="font-size:11px;color:var(--muted2);margin-top:2px">Use the Restock template to notify buyers when new keys are available.</div></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:rgba(251,191,36,.06);border-radius:8px;border:1px solid rgba(251,191,36,.12)">
+            <div style="font-size:18px">🔥</div>
+            <div><div style="font-size:12px;font-weight:600;color:var(--text)">Promo Blast</div><div style="font-size:11px;color:var(--muted2);margin-top:2px">Use the Promo template to announce sales or limited-time discounts.</div></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:rgba(34,211,165,.06);border-radius:8px;border:1px solid rgba(34,211,165,.12)">
+            <div style="font-size:18px">⚠️</div>
+            <div><div style="font-size:12px;font-weight:600;color:var(--text)">Avoid Spam</div><div style="font-size:11px;color:var(--muted2);margin-top:2px">Don't send too many broadcasts. Buyers may block the bot.</div></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -458,6 +527,7 @@ function goto(page) {
   });
   document.getElementById("ptitle").textContent={orders:"Orders",products:"Products",keys:"Keys",broadcast:"Broadcast"}[page];
   closeSidebar(); renderPage();
+  if(page==="broadcast") updateBcCount();
 }
 
 function renderPage() {
@@ -512,22 +582,42 @@ async function rejectOrd(id,btn) {
 function renderProducts() {
   const w=document.getElementById("plist");
   if(!products.length){ w.innerHTML=`<div class="empty"><div class="empty-icon">📦</div><div class="empty-text">${serverOk?"No products yet — add one!":"Server offline"}</div></div>`; return; }
-  w.innerHTML=products.map(p=>`
-    <div class="prod-item">
-      <div class="prod-emoji">${p.emoji||"🔑"}</div>
-      <div class="prod-info">
-        <div class="prod-name">${esc(p.name)}</div>
-        <div class="prod-desc">${esc(p.description||"")}</div>
-        <div class="prod-stock">🔑 ${(keyMap[p.id]||[]).length} keys</div>
-      </div>
-      <div class="prod-right">
-        <div class="prod-price">₱${p.price}</div>
-        <div class="prod-actions">
-          <button class="btn btn-outline btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Keys</button>
-          <button class="btn btn-danger  btn-sm" onclick="delProd('${p.id}')">🗑</button>
+
+  // Group by category
+  const grouped={};
+  for(const p of products){
+    const cat=p.category||"Other";
+    if(!grouped[cat]) grouped[cat]=[];
+    grouped[cat].push(p);
+  }
+
+  let html="";
+  for(const [cat,items] of Object.entries(grouped)){
+    // Category separator
+    html+=`<div style="display:flex;align-items:center;gap:8px;margin:12px 0 8px">
+      <div style="font-size:10px;font-weight:700;color:var(--accent2);letter-spacing:1px;text-transform:uppercase;white-space:nowrap">🎮 ${esc(cat)}</div>
+      <div style="flex:1;height:1px;background:linear-gradient(90deg,rgba(99,102,241,.3),transparent)"></div>
+      <div style="font-size:9px;color:var(--muted);font-family:'JetBrains Mono',monospace">${items.length} item${items.length!==1?"s":""}</div>
+    </div>`;
+    for(const p of items){
+      html+=`<div class="prod-item">
+        <div class="prod-emoji">${p.emoji||"🔑"}</div>
+        <div class="prod-info">
+          <div class="prod-name">${esc(p.name)}</div>
+          <div class="prod-desc">${esc(p.description||"")}</div>
+          <div class="prod-stock" style="margin-top:3px">🔑 ${(keyMap[p.id]||[]).length} keys</div>
         </div>
-      </div>
-    </div>`).join("");
+        <div class="prod-right">
+          <div class="prod-price">₱${p.price}</div>
+          <div class="prod-actions">
+            <button class="btn btn-outline btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Keys</button>
+            <button class="btn btn-danger  btn-sm" onclick="delProd('${p.id}')">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    }
+  }
+  w.innerHTML=html;
 }
 
 async function delProd(id) {
@@ -540,19 +630,43 @@ async function delProd(id) {
 function renderKeys() {
   const w=document.getElementById("klist");
   if(!products.length){ w.innerHTML=`<div class="empty"><div class="empty-icon">📦</div><div class="empty-text">${serverOk?"Add products first":"Server offline"}</div></div>`; return; }
-  w.innerHTML=products.map(p=>`
-    <div class="card" style="margin-bottom:12px">
-      <div class="card-head">
-        <div class="card-title">${p.emoji||"🔑"} ${esc(p.name)} <span style="color:var(--muted);font-size:10px;font-weight:400">(${(keyMap[p.id]||[]).length})</span></div>
-        <div style="display:flex;gap:5px">
-          <button class="btn btn-accent btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Add</button>
-          <button class="btn btn-danger btn-sm" onclick="clearKeys('${p.id}')">Clear</button>
+
+  // Group by category
+  const grouped={};
+  for(const p of products){
+    const cat=p.category||"Other";
+    if(!grouped[cat]) grouped[cat]=[];
+    grouped[cat].push(p);
+  }
+
+  let html="";
+  for(const [cat,items] of Object.entries(grouped)){
+    // Category separator
+    html+=`<div style="display:flex;align-items:center;gap:8px;margin:4px 0 10px">
+      <div style="font-size:10px;font-weight:700;color:var(--accent2);letter-spacing:1px;text-transform:uppercase;white-space:nowrap">🎮 ${esc(cat)}</div>
+      <div style="flex:1;height:1px;background:linear-gradient(90deg,rgba(99,102,241,.3),transparent)"></div>
+      <div style="font-size:9px;color:var(--muted);font-family:'JetBrains Mono',monospace">${items.length} product${items.length!==1?"s":""}</div>
+    </div>`;
+    for(const p of items){
+      const stockCount=(keyMap[p.id]||[]).length;
+      html+=`<div class="card" style="margin-bottom:10px;border-color:${stockCount===0?"rgba(244,63,110,.2)":"var(--border)"}">
+        <div class="card-head">
+          <div>
+            <div class="card-title">${p.emoji||"🔑"} ${esc(p.name)} <span style="color:var(--muted);font-size:10px;font-weight:400">(${stockCount} keys)</span></div>
+            <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:2px">₱${p.price}</div>
+          </div>
+          <div style="display:flex;gap:5px">
+            <button class="btn btn-accent btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Add</button>
+            <button class="btn btn-danger btn-sm" onclick="clearKeys('${p.id}')">Clear</button>
+          </div>
         </div>
-      </div>
-      ${!(keyMap[p.id]||[]).length
-        ?`<div class="empty" style="padding:12px"><div class="empty-text">⚠️ Out of stock!</div></div>`
-        :`<div class="keys-wrap">${(keyMap[p.id]||[]).map(k=>`<span class="key-chip">🔑 ${esc(k)}</span>`).join("")}</div>`}
-    </div>`).join("");
+        ${stockCount===0
+          ?`<div class="empty" style="padding:10px"><div class="empty-text" style="color:var(--red)">⚠️ Out of stock!</div></div>`
+          :`<div class="keys-wrap">${(keyMap[p.id]||[]).map(k=>`<span class="key-chip">🔑 ${esc(k)}</span>`).join("")}</div>`}
+      </div>`;
+    }
+  }
+  w.innerHTML=html;
 }
 
 async function clearKeys(pid) {
@@ -562,28 +676,84 @@ async function clearKeys(pid) {
 }
 
 // ── BROADCAST via Token ───────────────────────────────────────────────────────
+let bcAudience = "all";
+
+function setAud(btn, aud) {
+  bcAudience = aud;
+  document.querySelectorAll(".aud-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  updateBcCount();
+}
+
+function updateBcCount() {
+  let buyers;
+  if (bcAudience === "pending")  buyers = [...new Set(orders.filter(o=>o.status==="pending").map(o=>o.buyerId))];
+  else if (bcAudience === "approved") buyers = [...new Set(orders.filter(o=>o.status==="approved").map(o=>o.buyerId))];
+  else buyers = [...new Set(orders.map(o=>o.buyerId).filter(Boolean))];
+  document.getElementById("bc-count").textContent = buyers.length;
+}
+
+function updateCharCount(el) {
+  document.getElementById("bc-charcount").textContent = el.value.length + " / 4096";
+}
+
 function bpreview(el) {
-  const p=document.getElementById("bprev");
-  const v=el.value.trim();
-  p.style.display=v?"block":"none";
-  p.innerHTML=`<b style="color:var(--accent2)">Preview:</b><br>${esc(v)}`;
+  const p = document.getElementById("bprev");
+  const t = document.getElementById("bprev-text");
+  const v = el.value.trim();
+  p.style.display = v ? "block" : "none";
+  if (t) t.textContent = v;
+}
+
+function insertTemplate(type) {
+  const templates = {
+    restock: "📦 RESTOCK ALERT!\n\nBag na! Bagong keys available na para sa [PRODUCT]!\n\n🔑 Available ngayon — limited slots lang!\nType /start para mag-order. 🚀",
+    promo:   "🔥 PROMO ALERT!\n\nLimited time offer — [PRODUCT] sa espesyal na presyo!\n\n⏰ Ngayong araw lang to!\nType /start para ma-grab. 💥"
+  };
+  const el = document.getElementById("bmsg");
+  el.value = templates[type] || "";
+  bpreview(el);
+  updateCharCount(el);
 }
 
 async function sendBcast() {
-  const msg=document.getElementById("bmsg").value.trim();
-  if(!msg) return;
-  const buyers=[...new Set(orders.map(o=>o.buyerId).filter(Boolean))];
-  if(!buyers.length){ showToast("⚠️ No buyers yet."); return; }
-  showToast(`📡 Sending to ${buyers.length} buyers...`);
-  let sent=0,failed=0;
-  for(const id of buyers) {
-    try { const r=await tgSend(id,msg); if(r.ok) sent++; else failed++; }
+  const msg = document.getElementById("bmsg").value.trim();
+  if (!msg) { showToast("⚠️ Type a message first."); return; }
+
+  let buyers;
+  if (bcAudience === "pending")  buyers = [...new Set(orders.filter(o=>o.status==="pending").map(o=>o.buyerId).filter(Boolean))];
+  else if (bcAudience === "approved") buyers = [...new Set(orders.filter(o=>o.status==="approved").map(o=>o.buyerId).filter(Boolean))];
+  else buyers = [...new Set(orders.map(o=>o.buyerId).filter(Boolean))];
+
+  if (!buyers.length) { showToast("⚠️ No buyers in this group yet."); return; }
+  if (!confirm(`Send to ${buyers.length} buyers?`)) return;
+
+  const btn = document.getElementById("bc-btn");
+  const prog = document.getElementById("bc-progress");
+  const bar = document.getElementById("bc-bar");
+  const stat = document.getElementById("bc-status");
+
+  btn.disabled = true;
+  prog.style.display = "block";
+  let sent = 0, failed = 0;
+
+  for (let i = 0; i < buyers.length; i++) {
+    try { const r = await tgSend(buyers[i], msg); if (r.ok) sent++; else failed++; }
     catch { failed++; }
-    await sleep(100);
+    const pct = Math.round(((i+1)/buyers.length)*100);
+    bar.style.width = pct + "%";
+    stat.textContent = `Sending... ${i+1}/${buyers.length} (${pct}%)`;
+    await sleep(120);
   }
+
+  stat.textContent = `✅ Done! Sent: ${sent} | Failed: ${failed}`;
+  bar.style.background = failed ? "linear-gradient(90deg,var(--accent),var(--yellow))" : "linear-gradient(90deg,var(--accent),var(--green))";
   showToast(`✅ Sent: ${sent} | Failed: ${failed}`);
-  document.getElementById("bmsg").value="";
-  document.getElementById("bprev").style.display="none";
+  document.getElementById("bc-last").textContent = new Date().toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit"});
+  document.getElementById("bmsg").value = "";
+  document.getElementById("bprev").style.display = "none";
+  btn.disabled = false;
+  setTimeout(() => { prog.style.display = "none"; bar.style.width = "0%"; }, 4000);
 }
 
 // ── MODAL ─────────────────────────────────────────────────────────────────────
@@ -595,11 +765,14 @@ function openModal(type,pid,pname) {
       <div class="modal-title">➕ Add Product</div>
       <div style="display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;gap:8px">
-          <div class="fg" style="flex:1"><label>Name</label><input class="finput" id="mn" placeholder="Netflix Premium"/></div>
+          <div class="fg" style="flex:1"><label>Name</label><input class="finput" id="mn" placeholder="CODM 30 Days"/></div>
           <div class="fg" style="width:72px"><label>Emoji</label><input class="finput" id="me" value="🔑"/></div>
         </div>
-        <div class="fg"><label>Price (₱)</label><input class="finput" id="mp" type="number" inputmode="numeric" placeholder="199"/></div>
-        <div class="fg"><label>Description</label><input class="finput" id="md" placeholder="1 Month, Full HD"/></div>
+        <div style="display:flex;gap:8px">
+          <div class="fg"><label>Price (₱)</label><input class="finput" id="mp" type="number" inputmode="numeric" placeholder="350"/></div>
+          <div class="fg"><label>Category</label><input class="finput" id="mcat" placeholder="CODM" list="cat-suggestions"/><datalist id="cat-suggestions"><option value="CODM"/><option value="Mobile Legends"/><option value="Free Fire"/><option value="Other"/></datalist></div>
+        </div>
+        <div class="fg"><label>Description</label><input class="finput" id="md" placeholder="30 Days Access"/></div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -627,8 +800,9 @@ async function saveProd() {
   const price=document.getElementById("mp").value;
   const emoji=document.getElementById("me").value.trim()||"🔑";
   const desc=document.getElementById("md").value.trim();
+  const category=document.getElementById("mcat").value.trim()||"Other";
   if(!name||!price){ showToast("⚠️ Name and price required."); return; }
-  try { await af("/products","POST",{name,price:Number(price),emoji,description:desc}); showToast("✅ Product saved!"); closeModal(); await loadAll(); }
+  try { await af("/products","POST",{name,price:Number(price),emoji,description:desc,category}); showToast("✅ Product saved!"); closeModal(); await loadAll(); }
   catch { showToast("❌ Failed — server offline?"); }
 }
 
