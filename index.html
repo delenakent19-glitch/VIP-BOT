@@ -357,26 +357,30 @@ html,body{height:100%;font-family:'Space Grotesk',sans-serif;background:var(--bg
         <div class="card-head">
           <div class="card-title">💳 Payment QR Code</div>
         </div>
-        <p style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.6">
-          Upload your GCash / payment QR code image. It will be shown to buyers when they place an order.<br>
-          Send the QR image to your bot first, then copy its Telegram File ID below.
+        <p style="font-size:12px;color:var(--muted2);margin-bottom:16px;line-height:1.6">
+          Upload your payment QR code image. It will be sent to buyers when they place an order.
         </p>
-        <div id="qr-preview-wrap" style="display:none;margin-bottom:14px;text-align:center">
-          <div style="font-size:11px;font-weight:700;color:var(--accent2);letter-spacing:.7px;text-transform:uppercase;margin-bottom:8px">Current QR Preview</div>
-          <img id="qr-preview-img" src="" alt="QR Code" style="max-width:200px;border-radius:10px;border:1px solid var(--border2)"/>
-        </div>
-        <div class="fg" style="margin-bottom:10px">
-          <label>QR Code Telegram File ID</label>
-          <input class="finput" id="qr-fileid" placeholder="AgACAgUAAxkB..." autocomplete="off" spellcheck="false"/>
-          <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace">
-            Send your QR image to @userinfobot or your bot → copy the file_id here
+
+        <!-- Drop zone / preview -->
+        <div id="qr-dropzone" onclick="document.getElementById('qr-file-input').click()"
+          style="border:2px dashed var(--border2);border-radius:12px;padding:24px 16px;text-align:center;cursor:pointer;transition:border-color .2s;margin-bottom:14px;position:relative">
+          <input type="file" id="qr-file-input" accept="image/*" style="display:none" onchange="onQRFileSelected(this)"/>
+          <div id="qr-drop-placeholder">
+            <div style="font-size:32px;margin-bottom:8px">🖼️</div>
+            <div style="font-size:13px;font-weight:600;color:var(--text)">Tap to upload QR image</div>
+            <div style="font-size:11px;color:var(--muted2);margin-top:4px">PNG, JPG — max 5MB</div>
           </div>
+          <img id="qr-preview-img" src="" alt="QR Preview"
+            style="display:none;max-width:200px;max-height:200px;border-radius:10px;border:1px solid var(--border2);margin:0 auto"/>
         </div>
+
+        <!-- Status bar -->
+        <div id="qr-status" style="display:none;padding:10px 13px;border-radius:8px;font-size:12px;font-family:'JetBrains Mono',monospace;margin-bottom:12px;line-height:1.5"></div>
+
         <div style="display:flex;gap:8px">
-          <button class="btn btn-accent" onclick="saveQR()" style="flex:1">💾 Save QR Code</button>
-          <button class="btn btn-danger btn-sm" onclick="removeQR()">🗑 Remove</button>
+          <button class="btn btn-accent" id="qr-save-btn" onclick="uploadAndSaveQR()" style="flex:1;display:none">📤 Upload &amp; Save</button>
+          <button class="btn btn-danger btn-sm" id="qr-remove-btn" onclick="removeQR()" style="display:none">🗑 Remove</button>
         </div>
-        <div id="qr-status" style="display:none;margin-top:10px;font-size:12px;font-family:'JetBrains Mono',monospace"></div>
       </div>
     </div>
   </div>
@@ -871,40 +875,140 @@ async function sendBcast() {
 }
 
 // ── QR CODE SETTINGS ─────────────────────────────────────────────────────────
+let qrPendingFile = null;
+
 function loadQRSettings() {
   const saved = localStorage.getItem("kb_qr_fileid") || "";
-  document.getElementById("qr-fileid").value = saved;
-  const wrap = document.getElementById("qr-preview-wrap");
-  if (saved) {
-    // Show preview using Telegram file URL (requires bot token)
-    wrap.style.display = "block";
+  const savedDataUrl = localStorage.getItem("kb_qr_dataurl") || "";
+  const status = document.getElementById("qr-status");
+  const dropzone = document.getElementById("qr-dropzone");
+  const placeholder = document.getElementById("qr-drop-placeholder");
+  const img = document.getElementById("qr-preview-img");
+  const saveBtn = document.getElementById("qr-save-btn");
+  const removeBtn = document.getElementById("qr-remove-btn");
+
+  if (saved && savedDataUrl) {
+    img.src = savedDataUrl;
+    img.style.display = "block";
+    placeholder.style.display = "none";
+    dropzone.style.borderStyle = "solid";
+    dropzone.style.borderColor = "var(--green)";
+    saveBtn.style.display = "none";
+    removeBtn.style.display = "inline-flex";
+    status.style.display = "block";
+    status.style.background = "rgba(34,211,165,.08)";
+    status.style.border = "1px solid rgba(34,211,165,.2)";
+    status.style.color = "var(--green)";
+    status.textContent = "✅ QR code saved — shown to buyers at checkout.";
   } else {
-    wrap.style.display = "none";
+    img.style.display = "none";
+    placeholder.style.display = "block";
+    dropzone.style.borderStyle = "dashed";
+    dropzone.style.borderColor = "var(--border2)";
+    saveBtn.style.display = "none";
+    removeBtn.style.display = "none";
+    status.style.display = "none";
   }
+  qrPendingFile = null;
 }
 
-async function saveQR() {
-  const fileId = document.getElementById("qr-fileid").value.trim();
+function onQRFileSelected(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { showToast("⚠️ Image too large — max 5MB."); return; }
+
+  qrPendingFile = file;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = document.getElementById("qr-preview-img");
+    const placeholder = document.getElementById("qr-drop-placeholder");
+    const dropzone = document.getElementById("qr-dropzone");
+    const saveBtn = document.getElementById("qr-save-btn");
+    const status = document.getElementById("qr-status");
+
+    img.src = e.target.result;
+    img.style.display = "block";
+    placeholder.style.display = "none";
+    dropzone.style.borderStyle = "solid";
+    dropzone.style.borderColor = "var(--accent)";
+    saveBtn.style.display = "flex";
+
+    status.style.display = "block";
+    status.style.background = "rgba(251,191,36,.08)";
+    status.style.border = "1px solid rgba(251,191,36,.2)";
+    status.style.color = "var(--yellow)";
+    status.textContent = "⚠️ Image selected — tap Upload & Save to confirm.";
+  };
+  reader.readAsDataURL(file);
+}
+
+async function uploadAndSaveQR() {
+  if (!qrPendingFile) { showToast("⚠️ Select an image first."); return; }
   const status = document.getElementById("qr-status");
-  if (!fileId) { showToast("⚠️ Enter a File ID first."); return; }
-  localStorage.setItem("kb_qr_fileid", fileId);
-  // Also save to server so index.js can use it
-  try {
-    await af("/settings/qr","PUT",{qrFileId: fileId});
-  } catch {}
+  const saveBtn = document.getElementById("qr-save-btn");
+  const removeBtn = document.getElementById("qr-remove-btn");
+  const dropzone = document.getElementById("qr-dropzone");
+
+  saveBtn.disabled = true;
+  saveBtn.innerHTML = '<span class="spin"></span> Uploading...';
   status.style.display = "block";
-  status.style.color = "var(--green)";
-  status.textContent = "✅ QR code saved! Buyers will see it when ordering.";
-  document.getElementById("qr-preview-wrap").style.display = "block";
-  showToast("✅ QR code saved!");
+  status.style.background = "rgba(251,191,36,.08)";
+  status.style.border = "1px solid rgba(251,191,36,.2)";
+  status.style.color = "var(--yellow)";
+  status.textContent = "⏳ Uploading to Telegram...";
+
+  try {
+    const adminId = localStorage.getItem("kb_admin_id");
+    if (!adminId || !TOKEN) throw new Error("Not connected. Reconnect first.");
+
+    const formData = new FormData();
+    formData.append("chat_id", adminId);
+    formData.append("photo", qrPendingFile, qrPendingFile.name);
+    formData.append("caption", "💳 Payment QR Code (uploaded via admin panel)");
+
+    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
+      method: "POST", body: formData
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.description || "Upload failed");
+
+    // Get the highest-res photo file_id
+    const photos = d.result.photo;
+    const fileId = photos[photos.length - 1].file_id;
+
+    // Save file_id + data URL locally
+    localStorage.setItem("kb_qr_fileid", fileId);
+    localStorage.setItem("kb_qr_dataurl", document.getElementById("qr-preview-img").src);
+
+    // Persist to server
+    try { await af("/settings/qr","PUT",{qrFileId: fileId}); } catch {}
+
+    dropzone.style.borderColor = "var(--green)";
+    saveBtn.style.display = "none";
+    removeBtn.style.display = "inline-flex";
+    status.style.background = "rgba(34,211,165,.08)";
+    status.style.border = "1px solid rgba(34,211,165,.2)";
+    status.style.color = "var(--green)";
+    status.textContent = "✅ QR code saved! Buyers will see it when ordering.";
+    qrPendingFile = null;
+    showToast("✅ QR code uploaded and saved!");
+  } catch(e) {
+    status.style.background = "rgba(244,63,110,.08)";
+    status.style.border = "1px solid rgba(244,63,110,.2)";
+    status.style.color = "var(--red)";
+    status.textContent = "❌ " + e.message;
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = "📤 Upload &amp; Save";
+    showToast("❌ Upload failed.");
+  }
 }
 
 async function removeQR() {
   if (!confirm("Remove QR code?")) return;
   localStorage.removeItem("kb_qr_fileid");
-  document.getElementById("qr-fileid").value = "";
-  document.getElementById("qr-preview-wrap").style.display = "none";
+  localStorage.removeItem("kb_qr_dataurl");
   try { await af("/settings/qr","PUT",{qrFileId: null}); } catch {}
+  loadQRSettings();
   showToast("🗑️ QR code removed.");
 }
 
