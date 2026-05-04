@@ -404,6 +404,7 @@ async function doConnect(silent=false) {
     API    = srv + "/api";
     localStorage.setItem(TOKEN_KEY, tok);
     localStorage.setItem(SERVER_KEY, srv);
+    localStorage.setItem("kb_admin_id", d.result.id);
 
     setLS("success", `✅ @${d.result.username} verified! Opening panel...`);
     await sleep(500);
@@ -612,6 +613,7 @@ function renderProducts() {
           <div class="prod-price">₱${p.price}</div>
           <div class="prod-actions">
             <button class="btn btn-outline btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Keys</button>
+            <button class="btn btn-outline btn-sm" onclick="openApkModal('${p.id}','${esc(p.name)}')" title="Attach APK file" style="${p.apkFileId?'color:var(--green);border-color:rgba(34,211,165,.3)':''}">${p.apkFileId?'📦 APK ✓':'📦 APK'}</button>
             <button class="btn btn-outline btn-sm" onclick="toggleProd('${p.id}',${!isActive})" title="${isActive?'Hide from bot':'Show in bot'}">${isActive?'🙈':'👁'}</button>
             <button class="btn btn-danger  btn-sm" onclick="delProd('${p.id}')">🗑</button>
           </div>
@@ -631,6 +633,104 @@ async function delProd(id) {
 async function toggleProd(id, active) {
   try { await af("/products/"+id+"/toggle","PUT",{active}); showToast(active?"👁 Product visible in bot!":"🙈 Product hidden from bot."); await loadAll(); }
   catch { showToast("❌ Failed."); }
+}
+
+function openApkModal(pid, pname) {
+  const prod = products.find(p=>p.id===pid) || {};
+  document.getElementById("modal").style.display="flex";
+  const inn = document.getElementById("modal-inner");
+  inn.innerHTML=`
+    <div class="modal-title">📦 APK File — ${esc(pname)}</div>
+    <p style="font-size:12px;color:var(--muted2);margin-bottom:14px">
+      Upload the APK once. It will be <b style="color:var(--text)">auto-delivered together with the key</b> every time an order is approved.
+    </p>
+    ${prod.apkFileId ? `
+    <div style="background:rgba(34,211,165,.07);border:1px solid rgba(34,211,165,.2);border-radius:9px;padding:12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
+      <div style="font-size:22px">📦</div>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--green)">APK Attached</div>
+        <div style="font-size:11px;color:var(--muted2);font-family:'JetBrains Mono',monospace;margin-top:2px">${esc(prod.apkFileName||"apk file")}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="removeApk('${pid}')">🗑 Remove</button>
+    </div>` : `
+    <div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2);border-radius:9px;padding:12px;margin-bottom:12px;font-size:12px;color:var(--yellow)">
+      ⚠️ No APK attached yet. Upload below.
+    </div>`}
+    <div class="fg" style="margin-bottom:12px">
+      <label>Upload APK via Telegram</label>
+      <p style="font-size:11px;color:var(--muted2);margin-top:4px;line-height:1.6">
+        1. Send the APK file to your bot in Telegram.<br>
+        2. Copy the <b style="color:var(--text)">File ID</b> from the bot's response below.<br>
+        3. Or use the Upload button to send via the panel.
+      </p>
+    </div>
+    <div class="fg" style="margin-bottom:4px">
+      <label>File Name (display)</label>
+      <input class="finput" id="apk-name" placeholder="game-v1.0.apk" value="${esc(prod.apkFileName||'')}"/>
+    </div>
+    <div class="fg" style="margin-bottom:12px">
+      <label>Telegram File ID</label>
+      <input class="finput" id="apk-fileid" placeholder="BQACAgUAAxkB..." value="${esc(prod.apkFileId||'')}"/>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace">Get this by sending the APK to @userinfobot or your bot</div>
+    </div>
+    <div style="background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.15);border-radius:9px;padding:12px;margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;color:var(--accent2);margin-bottom:6px">📤 Upload APK File Directly</div>
+      <input type="file" id="apk-file-input" accept=".apk,.zip" style="display:none" onchange="uploadApkFile('${pid}',this)"/>
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('apk-file-input').click()">📁 Choose APK File</button>
+      <span id="apk-upload-status" style="font-size:11px;color:var(--muted2);margin-left:8px;font-family:'JetBrains Mono',monospace"></span>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-accent" onclick="saveApk('${pid}')">💾 Save APK</button>
+    </div>`;
+}
+
+async function uploadApkFile(pid, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById("apk-upload-status");
+  status.textContent = "Uploading...";
+  status.style.color = "var(--yellow)";
+  try {
+    // Upload file to Telegram using sendDocument
+    const formData = new FormData();
+    formData.append("chat_id", localStorage.getItem("kb_admin_id") || "");
+    formData.append("document", file, file.name);
+    formData.append("caption", `APK upload for product: ${pid}`);
+    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendDocument`, {
+      method: "POST", body: formData
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.description || "Upload failed");
+    const fileId = d.result.document.file_id;
+    document.getElementById("apk-fileid").value = fileId;
+    document.getElementById("apk-name").value = file.name;
+    status.textContent = "✅ Uploaded! Click Save APK.";
+    status.style.color = "var(--green)";
+  } catch(e) {
+    status.textContent = "❌ " + e.message;
+    status.style.color = "var(--red)";
+  }
+}
+
+async function saveApk(pid) {
+  const apkFileId   = document.getElementById("apk-fileid").value.trim();
+  const apkFileName = document.getElementById("apk-name").value.trim() || "app.apk";
+  if (!apkFileId) { showToast("⚠️ Enter a File ID or upload a file first."); return; }
+  try {
+    await af("/products/"+pid+"/apk","PUT",{apkFileId, apkFileName});
+    showToast("✅ APK saved! Will auto-deliver with every key.");
+    closeModal(); await loadAll();
+  } catch { showToast("❌ Failed."); }
+}
+
+async function removeApk(pid) {
+  if (!confirm("Remove APK from this product?")) return;
+  try {
+    await af("/products/"+pid+"/apk","PUT",{apkFileId:null, apkFileName:null});
+    showToast("🗑️ APK removed.");
+    closeModal(); await loadAll();
+  } catch { showToast("❌ Failed."); }
 }
 
 // ── KEYS ─────────────────────────────────────────────────────────────────────
@@ -660,10 +760,15 @@ function renderKeys() {
         <div class="card-head">
           <div>
             <div class="card-title">${p.emoji||"🔑"} ${esc(p.name)} <span style="color:var(--muted);font-size:10px;font-weight:400">(${stockCount} keys)</span></div>
-            <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:2px">₱${p.price}</div>
+            <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:2px">₱${p.price}
+              ${p.apkFileId
+                ? ` &nbsp;·&nbsp; <span style="color:var(--green)">📦 APK attached</span>`
+                : ` &nbsp;·&nbsp; <span style="color:var(--muted)">📦 No APK</span>`}
+            </div>
           </div>
           <div style="display:flex;gap:5px">
             <button class="btn btn-accent btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Add</button>
+            <button class="btn btn-outline btn-sm" style="${p.apkFileId?'color:var(--green);border-color:rgba(34,211,165,.3)':''}" onclick="openApkModal('${p.id}','${esc(p.name)}')">${p.apkFileId?'📦 ✓':'📦 APK'}</button>
             <button class="btn btn-danger btn-sm" onclick="clearKeys('${p.id}')">Clear</button>
           </div>
         </div>

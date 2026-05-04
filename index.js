@@ -287,6 +287,7 @@ bot.on("callback_query", async (query) => {
 
       const gcashNum  = h(process.env.GCASH_NUMBER || "09XX-XXX-XXXX");
       const gcashName = h(process.env.GCASH_NAME   || "Admin");
+      const hasApk    = !!product.apkFileId;
 
       await bot.sendMessage(chatId,
         `<b>╔══════════════════════╗</b>\n` +
@@ -294,14 +295,15 @@ bot.on("callback_query", async (query) => {
         `<b>╚══════════════════════╝</b>\n\n` +
         `  🎮 Product : <b>${h(product.name)}</b>\n` +
         `  💰 Price   : <b>P${product.price}</b>\n` +
-        `  📦 Stock   : ${keysLeft} key${keysLeft !== 1 ? "s" : ""} left\n\n` +
-        `<b>━━━ 💳 PAYMENT DETAILS 💳 ━━━</b>\n\n` +
+        `  📦 Stock   : ${keysLeft} key${keysLeft !== 1 ? "s" : ""} left\n` +
+        (hasApk ? `  📲 Includes : <b>APK + Key</b>\n` : ``) +
+        `\n<b>━━━ 💳 PAYMENT DETAILS 💳 ━━━</b>\n\n` +
         `Send <b>P${product.price}</b> via GCash to:\n\n` +
         `  📱 Number : <code>${gcashNum}</code>\n` +
         `  👤 Name   : <b>${gcashName}</b>\n\n` +
         `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
         `📸 Send your <b>payment screenshot</b> here.\n` +
-        `🔑 Key delivered after verification.`,
+        (hasApk ? `🔑 Key + 📦 APK auto-delivered after verification.` : `🔑 Key delivered after verification.`),
         HTML
       );
     }
@@ -422,21 +424,37 @@ async function processApproval(orderId, adminChatId, msgId) {
     ).catch(() => {});
   }
 
+  const product = db.products[order.productId];
+  const apkFileId = product?.apkFileId || null;
+
+  // Send key message to buyer
   await bot.sendMessage(order.buyerId,
     `<b>╔══════════════════════╗</b>\n` +
     `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
     `<b>╚══════════════════════╝</b>\n\n` +
-    `Your key for <b>${h(order.productName)}</b> is ready!\n\n` +
+    `Your order for <b>${h(order.productName)}</b> is ready!\n\n` +
     `<b>━━━━━ 🔑 YOUR KEY 🔑 ━━━━━</b>\n` +
     `<code>${h(key)}</code>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    (apkFileId ? `📦 APK file is attached below.\n` : ``) +
     `  ✅ Approved: ${h(phTime(order.approvedAt))}\n\n` +
     `👆 Tap the key above to copy it.\n💙 Thank you for your purchase!`,
     HTML
   );
 
+  // Auto-send APK if product has one attached
+  if (apkFileId) {
+    await bot.sendDocument(order.buyerId, apkFileId, {
+      caption:
+        `<b>📦 APK — ${h(order.productName)}</b>\n` +
+        `Download and install this file to use your key.`,
+      parse_mode: "HTML"
+    });
+  }
+
   await bot.sendMessage(adminChatId,
-    `Key delivered to ${h(order.buyerUser)}\n<code>${h(key)}</code>`,
+    `✅ Delivered to ${h(order.buyerUser)}\n🔑 Key: <code>${h(key)}</code>` +
+    (apkFileId ? `\n📦 APK: sent` : ``),
     HTML
   );
 }
@@ -532,6 +550,19 @@ app.post("/api/products", async (req, res) => {
     };
     await saveDB(db);
     res.json(db.products[pid]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Store APK file_id for a product (uploaded via Telegram by admin)
+app.put("/api/products/:id/apk", async (req, res) => {
+  try {
+    const db = await getDB();
+    const p = db.products[req.params.id];
+    if (!p) return res.status(404).json({ error: "not found" });
+    p.apkFileId   = req.body.apkFileId || null;
+    p.apkFileName = req.body.apkFileName || null;
+    await saveDB(db);
+    res.json(p);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
