@@ -59,6 +59,21 @@ function escMd(text) {
   return String(text || "").replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
 }
 
+// ─── PHILIPPINE TIME (GMT+8) ──────────────────────────────────────────────────
+function phTime(isoString) {
+  const date = isoString ? new Date(isoString) : new Date();
+  return date.toLocaleString("en-PH", {
+    timeZone: "Asia/Manila",
+    year:     "numeric",
+    month:    "short",
+    day:      "2-digit",
+    hour:     "2-digit",
+    minute:   "2-digit",
+    second:   "2-digit",
+    hour12:   true
+  });
+}
+
 // /start
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
@@ -78,10 +93,11 @@ bot.onText(/\/start/, async (msg) => {
         parse_mode: "MarkdownV2",
         reply_markup: {
           keyboard: [
-            [{ text: "🛒 Shop Now" }, { text: "📦 My Orders" }],
-            [{ text: "ℹ️ How It Works" }]
+            [{ text: "🛒 Buy Key" }, { text: "📦 My Orders" }],
+            [{ text: "ℹ️ Help" }]
           ],
-          resize_keyboard: true
+          resize_keyboard: true,
+          one_time_keyboard: false
         }
       }
     );
@@ -157,37 +173,26 @@ async function showProducts(chatId) {
 // Message handler
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
-  const text   = msg.text || "";
-  if (text.startsWith("/")) return;
+  const text   = (msg.text || "").trim();
   if (msg.forward_from || msg.forward_from_chat) return;
 
+  // Handle slash commands inline too
+  if (text === "/myorders") return handleMyOrders(chatId, msg);
+  if (text === "/help")     return sendHelp(chatId);
+  if (text === "/shop")     return showProducts(chatId);
+  if (text.startsWith("/")) return; // ignore other slash commands
+
   try {
-    if (text === "🛒 Shop Now" || text === "🛒 Buy Key")  return await showProducts(chatId);
-    if (text === "ℹ️ How It Works" || text === "ℹ️ Help") return await sendHelp(chatId);
-
-    if (text === "📦 My Orders") {
-      const db = await getDB();
-      const myOrders = Object.values(db.orders)
-        .filter(o => String(o.buyerId) === String(chatId))
-        .slice(-5).reverse();
-
-      if (!myOrders.length) {
-        return bot.sendMessage(chatId,
-          `📭 *No Orders Yet*\n\n` +
-          `You have not placed any orders\.\n` +
-          `Tap *Shop Now* to browse products\!`,
-          { parse_mode: "MarkdownV2" }
-        );
-      }
-      let reply = `📦 *My Orders*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-      for (const o of myOrders) {
-        const icon = o.status === "approved" ? "✅" : o.status === "rejected" ? "❌" : "⏳";
-        reply += `${icon} *${escMd(o.productName)}* — ₱${o.amount}\n`;
-        reply += `   ID: \`${escMd(o.id)}\` · ${escMd(o.status.toUpperCase())}\n`;
-        if (o.key) reply += `   🔑 \`${escMd(o.key)}\`\n`;
-        reply += "\n";
-      }
-      return bot.sendMessage(chatId, reply, { parse_mode: "MarkdownV2" });
+    // Accept ALL known button label variants (old + new deployments)
+    const t = text.toLowerCase();
+    if (t.includes("shop") || t.includes("buy key") || t.includes("buy")) {
+      return await showProducts(chatId);
+    }
+    if (t.includes("how it works") || t.includes("help")) {
+      return await sendHelp(chatId);
+    }
+    if (t.includes("my orders") || t.includes("orders")) {
+      return await handleMyOrders(chatId, msg);
     }
 
     // Payment screenshot
@@ -206,6 +211,35 @@ bot.on("message", async (msg) => {
     }
   } catch (e) { console.error("message error:", e.message); }
 });
+
+// My Orders handler (shared by button + /myorders command)
+async function handleMyOrders(chatId) {
+  try {
+    const db = await getDB();
+    const myOrders = Object.values(db.orders)
+      .filter(o => String(o.buyerId) === String(chatId))
+      .slice(-5).reverse();
+
+    if (!myOrders.length) {
+      return bot.sendMessage(chatId,
+        `📭 *No Orders Yet*\n\n` +
+        `You have not placed any orders\.\n` +
+        `Tap *Shop Now* to browse products\!`,
+        { parse_mode: "MarkdownV2" }
+      );
+    }
+    let reply = `📦 *My Orders*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    for (const o of myOrders) {
+      const icon = o.status === "approved" ? "✅" : o.status === "rejected" ? "❌" : "⏳";
+      reply += `${icon} *${escMd(o.productName)}* — ₱${o.amount}\n`;
+      reply += `   ID: \`${escMd(o.id)}\` · ${escMd(o.status.toUpperCase())}\n`;
+      reply += `   🕐 ${escMd(phTime(o.createdAt))}\n`;
+      if (o.key) reply += `   🔑 \`${escMd(o.key)}\`\n`;
+      reply += "\n";
+    }
+    return bot.sendMessage(chatId, reply, { parse_mode: "MarkdownV2" });
+  } catch (e) { console.error("myOrders error:", e.message); }
+}
 
 // Callback query (inline buttons)
 bot.on("callback_query", async (query) => {
@@ -296,6 +330,7 @@ async function handlePayment(msg, state) {
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `Your order has been submitted\.\n\n` +
     `📋 Order ID: \`${escMd(orderId)}\`\n` +
+    `🕐 Submitted: ${escMd(phTime(order.createdAt))}\n` +
     `⏳ Status: *Under Review*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `You will receive your key once approved\.\n` +
@@ -311,6 +346,7 @@ async function handlePayment(msg, state) {
     `🎮 Product: *${escMd(product.name)}*\n` +
     `💰 Amount: *₱${product.price}*\n` +
     `📋 Order ID: \`${escMd(orderId)}\`\n` +
+    `🕐 Time: ${escMd(phTime(order.createdAt))}\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
   const keyboard = {
@@ -372,6 +408,7 @@ async function processApproval(orderId, adminChatId, msgId) {
     `Your key for *${escMd(order.productName)}* is ready\!\n\n` +
     `🔑 *Your Key:*\n` +
     `\`${escMd(key)}\`\n\n` +
+    `🕐 Approved: ${escMd(phTime(order.approvedAt))}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `Tap the key above to copy it\.\n` +
     `Thank you for your purchase\! 🙏`,
@@ -406,7 +443,8 @@ async function processRejection(orderId, adminChatId, msgId) {
     `❌ *Order Declined*\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `Your payment could not be verified\.\n\n` +
-    `📋 Order ID: \`${escMd(orderId)}\`\n\n` +
+    `📋 Order ID: \`${escMd(orderId)}\`\n` +
+    `🕐 Reviewed: ${escMd(phTime(order.rejectedAt))}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `If you believe this is an error,\n` +
     `contact support with your payment screenshot\.`,
@@ -567,12 +605,12 @@ function startKeepAlive(port) {
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/health`
     : `http://localhost:${port}/health`;
 
-  setInterval(async () => {
+  setInterval(() => {
     try {
       const http = require("http"), https = require("https");
       const lib = SELF_URL.startsWith("https") ? https : http;
-      lib.get(SELF_URL, (r) => console.log(`♻️  Keep-alive ping → ${r.statusCode}`))
-         .on("error", (e) => console.warn("Keep-alive error:", e.message));
-    } catch(e) { console.warn("Keep-alive error:", e.message); }
+      // Silent ping — no console.log to avoid Railway log rate limit
+      lib.get(SELF_URL, () => {}).on("error", () => {});
+    } catch(e) { /* ignore */ }
   }, 5 * 60 * 1000); // every 5 minutes
 }
