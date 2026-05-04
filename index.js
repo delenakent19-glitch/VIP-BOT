@@ -348,9 +348,10 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Health
-app.get("/",       (req, res) => res.json({ status: "ok", bot: "running", uptime: process.uptime() }));
-app.get("/health", (req, res) => res.json({ status: "ok", bot: "running", uptime: process.uptime() }));
+// Admin panel — serve index.html at root and /admin
+app.get("/",      (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/admin", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/health",(req, res) => res.json({ status: "ok", bot: "running", uptime: process.uptime() }));
 
 // Bot info
 app.get("/api/botinfo", async (req, res) => {
