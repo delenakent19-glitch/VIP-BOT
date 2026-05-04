@@ -17,7 +17,7 @@ const PORT       = process.env.PORT || 8080;
 const DB_FILE    = "./data/db.json";
 
 if (!BOT_TOKEN || !ADMIN_ID) {
-  console.error("❌ Missing BOT_TOKEN or ADMIN_ID in environment variables");
+  console.error("Missing BOT_TOKEN or ADMIN_ID in environment variables");
   process.exit(1);
 }
 
@@ -39,8 +39,6 @@ async function saveDB(db) {
 }
 
 // ─── BOT ─────────────────────────────────────────────────────────────────────
-// Use webhook on Railway (RAILWAY_PUBLIC_DOMAIN is set automatically),
-// fall back to polling for local development.
 const WEBHOOK_HOST = process.env.RAILWAY_PUBLIC_DOMAIN;
 const bot = WEBHOOK_HOST
   ? new TelegramBot(BOT_TOKEN, { webHook: { port: PORT } })
@@ -49,14 +47,21 @@ const bot = WEBHOOK_HOST
 if (WEBHOOK_HOST) {
   const webhookUrl = `https://${WEBHOOK_HOST}/bot${BOT_TOKEN}`;
   bot.setWebHook(webhookUrl)
-    .then(() => console.log(`✅ Webhook set: ${webhookUrl}`))
+    .then(() => console.log("Webhook set OK"))
     .catch(e  => console.error("Webhook error:", e.message));
 }
 
 const userState = {};
 
-function escMd(text) {
-  return String(text || "").replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
+// Use HTML parse mode everywhere — no escaping nightmares like MarkdownV2
+const HTML = { parse_mode: "HTML" };
+
+// Escape &, <, > in dynamic user data to prevent HTML injection / parse errors
+function h(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 // ─── PHILIPPINE TIME (GMT+8) ──────────────────────────────────────────────────
@@ -74,27 +79,26 @@ function phTime(isoString) {
   });
 }
 
-// /start
+// ─── /start ──────────────────────────────────────────────────────────────────
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const name   = msg.from.first_name || "there";
   try {
     await bot.sendMessage(chatId,
-      `🎮 *Hello, ${escMd(name)}!*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `Welcome to *Zeijie Order Bot* —\n` +
-      `your trusted store for premium game keys\.\n\n` +
-      `✅ Instant key delivery after approval\n` +
-      `💳 GCash payment accepted\n` +
-      `⚡ Fast, secure & reliable\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `Tap *Shop Now* to browse available keys\.`,
+      `<b>Hello, ${h(name)}!</b>\n` +
+      `Welcome to <b>Zeijie Order Bot</b>\n\n` +
+      `Your trusted store for premium game keys.\n\n` +
+      `<b>What we offer:</b>\n` +
+      `- Instant key delivery after approval\n` +
+      `- GCash payment accepted\n` +
+      `- Fast, secure &amp; reliable\n\n` +
+      `Tap <b>Buy Key</b> to browse available keys.`,
       {
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
         reply_markup: {
           keyboard: [
-            [{ text: "🛒 Buy Key" }, { text: "📦 My Orders" }],
-            [{ text: "ℹ️ Help" }]
+            [{ text: "Buy Key" }, { text: "My Orders" }],
+            [{ text: "Help" }]
           ],
           resize_keyboard: true,
           one_time_keyboard: false
@@ -104,46 +108,41 @@ bot.onText(/\/start/, async (msg) => {
   } catch (e) { console.error("start error:", e.message); }
 });
 
-// /help
+// ─── HELP ────────────────────────────────────────────────────────────────────
 bot.onText(/\/help/, (msg) => sendHelp(msg.chat.id));
 
 async function sendHelp(chatId) {
   try {
     await bot.sendMessage(chatId,
-      `ℹ️ *How It Works*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `*Step 1* — Browse 🛒\n` +
-      `Tap *Shop Now* and pick your product\.\n\n` +
-      `*Step 2* — Pay 💳\n` +
-      `Send payment via *GCash* to the number shown\.\n\n` +
-      `*Step 3* — Screenshot 📸\n` +
-      `Send your payment screenshot in this chat\.\n\n` +
-      `*Step 4* — Wait ⏳\n` +
-      `Admin reviews within *5 minutes* on average\.\n\n` +
-      `*Step 5* — Receive 🔑\n` +
-      `Your key will be delivered here automatically\!\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `Need help\? Contact the admin directly\.`,
-      { parse_mode: "MarkdownV2" }
+      `<b>How It Works</b>\n\n` +
+      `<b>Step 1 - Browse</b>\n` +
+      `Tap Buy Key and pick your product.\n\n` +
+      `<b>Step 2 - Pay</b>\n` +
+      `Send payment via GCash to the number shown.\n\n` +
+      `<b>Step 3 - Screenshot</b>\n` +
+      `Send your payment screenshot in this chat.\n\n` +
+      `<b>Step 4 - Wait</b>\n` +
+      `Admin reviews within 5 minutes on average.\n\n` +
+      `<b>Step 5 - Receive</b>\n` +
+      `Your key will be delivered here automatically!\n\n` +
+      `Need help? Contact the admin directly.`,
+      HTML
     );
   } catch (e) { console.error("help error:", e.message); }
 }
 
-// Show products grouped by category
+// ─── SHOW PRODUCTS ────────────────────────────────────────────────────────────
 async function showProducts(chatId) {
   try {
     const db = await getDB();
     const products = Object.values(db.products).filter(p => p.active);
     if (products.length === 0) {
       return bot.sendMessage(chatId,
-        `⚠️ *No Products Available*\n\n` +
-        `We are currently restocking\.\n` +
-        `Please check back soon\!`,
-        { parse_mode: "MarkdownV2" }
+        `<b>No Products Available</b>\n\nWe are currently restocking.\nPlease check back soon!`,
+        HTML
       );
     }
 
-    // Group by category
     const grouped = {};
     for (const p of products) {
       const cat = p.category || "Other";
@@ -151,68 +150,25 @@ async function showProducts(chatId) {
       grouped[cat].push(p);
     }
 
-    // Build inline keyboard with category headers
     const inline_keyboard = [];
     for (const [cat, items] of Object.entries(grouped)) {
-      inline_keyboard.push([{ text: `┌─ 🎮  ${cat}  ─┐`, callback_data: "noop" }]);
+      inline_keyboard.push([{ text: `--- ${cat} ---`, callback_data: "noop" }]);
       for (const p of items) {
         inline_keyboard.push([{
-          text: `${p.emoji || "🔑"} ${p.name} — ₱${p.price}`,
+          text: `${p.emoji || "🔑"} ${p.name} — P${p.price}`,
           callback_data: `buy_${p.id}`
         }]);
       }
     }
 
-    await bot.sendMessage(chatId, "🛍️ *Choose a product:*", {
-      parse_mode: "MarkdownV2",
+    await bot.sendMessage(chatId, "<b>Choose a product:</b>", {
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard }
     });
   } catch (e) { console.error("showProducts error:", e.message); }
 }
 
-// Message handler
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const text   = (msg.text || "").trim();
-  if (msg.forward_from || msg.forward_from_chat) return;
-
-  // Handle slash commands inline too
-  if (text === "/myorders") return handleMyOrders(chatId, msg);
-  if (text === "/help")     return sendHelp(chatId);
-  if (text === "/shop")     return showProducts(chatId);
-  if (text.startsWith("/")) return; // ignore other slash commands
-
-  try {
-    // Accept ALL known button label variants (old + new deployments)
-    const t = text.toLowerCase();
-    if (t.includes("shop") || t.includes("buy key") || t.includes("buy")) {
-      return await showProducts(chatId);
-    }
-    if (t.includes("how it works") || t.includes("help")) {
-      return await sendHelp(chatId);
-    }
-    if (t.includes("my orders") || t.includes("orders")) {
-      return await handleMyOrders(chatId, msg);
-    }
-
-    // Payment screenshot
-    const state = userState[chatId];
-    if (state && state.step === "awaiting_screenshot") {
-      if (msg.photo || msg.document) {
-        return await handlePayment(msg, state);
-      } else {
-        return bot.sendMessage(chatId,
-          `📸 *Screenshot Required*\n\n` +
-          `Please send your *GCash payment screenshot*\n` +
-          `as a photo to complete your order\.`,
-          { parse_mode: "MarkdownV2" }
-        );
-      }
-    }
-  } catch (e) { console.error("message error:", e.message); }
-});
-
-// My Orders handler (shared by button + /myorders command)
+// ─── MY ORDERS ────────────────────────────────────────────────────────────────
 async function handleMyOrders(chatId) {
   try {
     const db = await getDB();
@@ -222,26 +178,66 @@ async function handleMyOrders(chatId) {
 
     if (!myOrders.length) {
       return bot.sendMessage(chatId,
-        `📭 *No Orders Yet*\n\n` +
-        `You have not placed any orders\.\n` +
-        `Tap *Shop Now* to browse products\!`,
-        { parse_mode: "MarkdownV2" }
+        `<b>No Orders Yet</b>\n\nYou have not placed any orders.\nTap Buy Key to browse products!`,
+        HTML
       );
     }
-    let reply = `📦 *My Orders*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    let reply = `<b>My Orders (last 5)</b>\n\n`;
     for (const o of myOrders) {
-      const icon = o.status === "approved" ? "✅" : o.status === "rejected" ? "❌" : "⏳";
-      reply += `${icon} *${escMd(o.productName)}* — ₱${o.amount}\n`;
-      reply += `   ID: \`${escMd(o.id)}\` · ${escMd(o.status.toUpperCase())}\n`;
-      reply += `   🕐 ${escMd(phTime(o.createdAt))}\n`;
-      if (o.key) reply += `   🔑 \`${escMd(o.key)}\`\n`;
+      const icon = o.status === "approved" ? "APPROVED" : o.status === "rejected" ? "REJECTED" : "PENDING";
+      reply += `<b>${h(o.productName)}</b> — P${o.amount}\n`;
+      reply += `  ID: <code>${h(o.id)}</code>\n`;
+      reply += `  Status: ${icon}\n`;
+      reply += `  Date: ${h(phTime(o.createdAt))}\n`;
+      if (o.key) reply += `  Key: <code>${h(o.key)}</code>\n`;
       reply += "\n";
     }
-    return bot.sendMessage(chatId, reply, { parse_mode: "MarkdownV2" });
+    return bot.sendMessage(chatId, reply, HTML);
   } catch (e) { console.error("myOrders error:", e.message); }
 }
 
-// Callback query (inline buttons)
+// ─── MESSAGE HANDLER ─────────────────────────────────────────────────────────
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  const text   = (msg.text || "").trim();
+  if (msg.forward_from || msg.forward_from_chat) return;
+
+  // Slash command aliases
+  if (text === "/myorders") return handleMyOrders(chatId);
+  if (text === "/help")     return sendHelp(chatId);
+  if (text === "/shop")     return showProducts(chatId);
+  if (text.startsWith("/")) return;
+
+  try {
+    const t = text.toLowerCase();
+
+    if (t.includes("buy") || t.includes("shop")) {
+      return await showProducts(chatId);
+    }
+    if (t.includes("help") || t.includes("how")) {
+      return await sendHelp(chatId);
+    }
+    if (t.includes("order")) {
+      return await handleMyOrders(chatId);
+    }
+
+    // Awaiting payment screenshot
+    const state = userState[chatId];
+    if (state && state.step === "awaiting_screenshot") {
+      if (msg.photo || msg.document) {
+        return await handlePayment(msg, state);
+      } else {
+        return bot.sendMessage(chatId,
+          `<b>Screenshot Required</b>\n\nPlease send your GCash payment screenshot as a photo to complete your order.`,
+          HTML
+        );
+      }
+    }
+  } catch (e) { console.error("message error:", e.message); }
+});
+
+// ─── CALLBACK QUERY ───────────────────────────────────────────────────────────
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const msgId  = query.message.message_id;
@@ -249,42 +245,40 @@ bot.on("callback_query", async (query) => {
   await bot.answerCallbackQuery(query.id).catch(() => {});
 
   try {
-    if (data === "noop") return; // category header tap — do nothing
+    if (data === "noop") return;
 
-  if (data.startsWith("buy_")) {
-      const pid = data.replace("buy_", "");
-      const db  = await getDB();
+    if (data.startsWith("buy_")) {
+      const pid     = data.replace("buy_", "");
+      const db      = await getDB();
       const product = db.products[pid];
       if (!product) return bot.sendMessage(chatId, "Product not found.");
 
       const keysLeft = (db.keys[pid] || []).length;
       if (keysLeft === 0) {
         return bot.sendMessage(chatId,
-          `🚫 *Out of Stock*\n\n` +
-          `*${escMd(product.name)}* is currently unavailable\.\n` +
-          `Please try another product or check back later\.`,
-          { parse_mode: "MarkdownV2" }
+          `<b>Out of Stock</b>\n\n<b>${h(product.name)}</b> is currently unavailable.\nPlease try another product or check back later.`,
+          HTML
         );
       }
 
       userState[chatId] = { step: "awaiting_screenshot", selectedProduct: product };
       await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: msgId }).catch(() => {});
 
+      const gcashNum  = h(process.env.GCASH_NUMBER || "09XX-XXX-XXXX");
+      const gcashName = h(process.env.GCASH_NAME   || "Admin");
+
       await bot.sendMessage(chatId,
-        `🛒 *Order Summary*\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🎮 *${escMd(product.name)}*\n` +
-        `💰 Price: *₱${product.price}*\n` +
-        `📦 Stock: ${keysLeft} key${keysLeft !== 1 ? "s" : ""} available\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `💳 *Payment Instructions*\n\n` +
-        `Send *₱${product.price}* via GCash to:\n\n` +
-        `📱 Number: \`${escMd(process.env.GCASH_NUMBER || "09XX-XXX-XXXX")}\`\n` +
-        `👤 Name: *${escMd(process.env.GCASH_NAME || "Admin")}*\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `📸 Send your *payment screenshot* here\.\n` +
-        `Your key will be delivered after verification\.`,
-        { parse_mode: "MarkdownV2" }
+        `<b>Order Summary</b>\n\n` +
+        `Product: <b>${h(product.name)}</b>\n` +
+        `Price: <b>P${product.price}</b>\n` +
+        `Stock: ${keysLeft} key${keysLeft !== 1 ? "s" : ""} available\n\n` +
+        `<b>Payment Instructions</b>\n\n` +
+        `Send <b>P${product.price}</b> via GCash to:\n` +
+        `Number: <code>${gcashNum}</code>\n` +
+        `Name: <b>${gcashName}</b>\n\n` +
+        `Now send your <b>payment screenshot</b> here.\n` +
+        `Your key will be delivered after verification.`,
+        HTML
       );
     }
 
@@ -300,7 +294,7 @@ bot.on("callback_query", async (query) => {
   } catch (e) { console.error("callback error:", e.message); }
 });
 
-// Payment received
+// ─── HANDLE PAYMENT ───────────────────────────────────────────────────────────
 async function handlePayment(msg, state) {
   const chatId  = msg.chat.id;
   const product = state.selectedProduct;
@@ -325,66 +319,62 @@ async function handlePayment(msg, state) {
   db.orders[orderId] = order;
   await saveDB(db);
 
+  // Confirm to buyer
   await bot.sendMessage(chatId,
-    `✅ *Payment Received\!*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `Your order has been submitted\.\n\n` +
-    `📋 Order ID: \`${escMd(orderId)}\`\n` +
-    `🕐 Submitted: ${escMd(phTime(order.createdAt))}\n` +
-    `⏳ Status: *Under Review*\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `You will receive your key once approved\.\n` +
-    `Average wait time: *under 5 minutes*\.`,
-    { parse_mode: "MarkdownV2" }
+    `<b>Payment Received!</b>\n\n` +
+    `Your order has been submitted.\n\n` +
+    `Order ID: <code>${h(orderId)}</code>\n` +
+    `Submitted: ${h(phTime(order.createdAt))}\n` +
+    `Status: <b>Under Review</b>\n\n` +
+    `You will receive your key once approved.\n` +
+    `Average wait time: under 5 minutes.`,
+    HTML
   );
 
+  // Notify admin
   const adminMsg =
-    `🔔 *NEW ORDER*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `👤 Buyer: ${escMd(order.buyerUser)}\n` +
-    `🆔 User ID: \`${chatId}\`\n` +
-    `🎮 Product: *${escMd(product.name)}*\n` +
-    `💰 Amount: *₱${product.price}*\n` +
-    `📋 Order ID: \`${escMd(orderId)}\`\n` +
-    `🕐 Time: ${escMd(phTime(order.createdAt))}\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    `<b>NEW ORDER</b>\n\n` +
+    `Buyer: ${h(order.buyerUser)}\n` +
+    `User ID: <code>${chatId}</code>\n` +
+    `Product: <b>${h(product.name)}</b>\n` +
+    `Amount: <b>P${product.price}</b>\n` +
+    `Order ID: <code>${h(orderId)}</code>\n` +
+    `Time: ${h(phTime(order.createdAt))}`;
 
   const keyboard = {
     inline_keyboard: [[
-      { text: "✅ APPROVE", callback_data: `approve_${orderId}` },
-      { text: "❌ REJECT",  callback_data: `reject_${orderId}`  }
+      { text: "APPROVE", callback_data: `approve_${orderId}` },
+      { text: "REJECT",  callback_data: `reject_${orderId}`  }
     ]]
   };
 
   if (order.screenshotFileId) {
     await bot.sendPhoto(ADMIN_ID, order.screenshotFileId, {
-      caption: adminMsg, parse_mode: "MarkdownV2", reply_markup: keyboard
+      caption: adminMsg, parse_mode: "HTML", reply_markup: keyboard
     });
   } else {
-    await bot.sendMessage(ADMIN_ID, adminMsg, {
-      parse_mode: "MarkdownV2", reply_markup: keyboard
-    });
+    await bot.sendMessage(ADMIN_ID, adminMsg, { parse_mode: "HTML", reply_markup: keyboard });
   }
 
   if (CHANNEL_ID) {
-    await bot.sendMessage(CHANNEL_ID, adminMsg, { parse_mode: "MarkdownV2" }).catch(() => {});
+    await bot.sendMessage(CHANNEL_ID, adminMsg, { parse_mode: "HTML" }).catch(() => {});
   }
 
   delete userState[chatId];
 }
 
-// Approve
+// ─── APPROVE ──────────────────────────────────────────────────────────────────
 async function processApproval(orderId, adminChatId, msgId) {
   const db    = await getDB();
   const order = db.orders[orderId];
-  if (!order)                   return bot.sendMessage(adminChatId, "Order not found.");
+  if (!order)                     return bot.sendMessage(adminChatId, "Order not found.");
   if (order.status !== "pending") return bot.sendMessage(adminChatId, "Already processed.");
 
   const keys = db.keys[order.productId] || [];
   if (keys.length === 0) {
     return bot.sendMessage(adminChatId,
-      `⚠️ No keys left for *${escMd(order.productName)}*\\! Add more keys in the admin panel\\.`,
-      { parse_mode: "MarkdownV2" }
+      `No keys left for <b>${h(order.productName)}</b>. Add more keys in the admin panel.`,
+      HTML
     );
   }
 
@@ -397,35 +387,31 @@ async function processApproval(orderId, adminChatId, msgId) {
 
   if (msgId) {
     await bot.editMessageReplyMarkup(
-      { inline_keyboard: [[{ text: "✅ APPROVED", callback_data: "done" }]] },
+      { inline_keyboard: [[{ text: "APPROVED", callback_data: "done" }]] },
       { chat_id: adminChatId, message_id: msgId }
     ).catch(() => {});
   }
 
   await bot.sendMessage(order.buyerId,
-    `✅ *Order Approved\!*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `Your key for *${escMd(order.productName)}* is ready\!\n\n` +
-    `🔑 *Your Key:*\n` +
-    `\`${escMd(key)}\`\n\n` +
-    `🕐 Approved: ${escMd(phTime(order.approvedAt))}\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `Tap the key above to copy it\.\n` +
-    `Thank you for your purchase\! 🙏`,
-    { parse_mode: "MarkdownV2" }
+    `<b>Order Approved!</b>\n\n` +
+    `Your key for <b>${h(order.productName)}</b> is ready!\n\n` +
+    `<b>Your Key:</b>\n<code>${h(key)}</code>\n\n` +
+    `Approved: ${h(phTime(order.approvedAt))}\n\n` +
+    `Tap the key above to copy it.\nThank you for your purchase!`,
+    HTML
   );
 
   await bot.sendMessage(adminChatId,
-    `✅ Key delivered to ${escMd(order.buyerUser)}\n\`${escMd(key)}\``,
-    { parse_mode: "MarkdownV2" }
+    `Key delivered to ${h(order.buyerUser)}\n<code>${h(key)}</code>`,
+    HTML
   );
 }
 
-// Reject
+// ─── REJECT ───────────────────────────────────────────────────────────────────
 async function processRejection(orderId, adminChatId, msgId) {
   const db    = await getDB();
   const order = db.orders[orderId];
-  if (!order)                   return bot.sendMessage(adminChatId, "Order not found.");
+  if (!order)                     return bot.sendMessage(adminChatId, "Order not found.");
   if (order.status !== "pending") return bot.sendMessage(adminChatId, "Already processed.");
 
   order.status     = "rejected";
@@ -434,21 +420,18 @@ async function processRejection(orderId, adminChatId, msgId) {
 
   if (msgId) {
     await bot.editMessageReplyMarkup(
-      { inline_keyboard: [[{ text: "❌ REJECTED", callback_data: "done" }]] },
+      { inline_keyboard: [[{ text: "REJECTED", callback_data: "done" }]] },
       { chat_id: adminChatId, message_id: msgId }
     ).catch(() => {});
   }
 
   await bot.sendMessage(order.buyerId,
-    `❌ *Order Declined*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `Your payment could not be verified\.\n\n` +
-    `📋 Order ID: \`${escMd(orderId)}\`\n` +
-    `🕐 Reviewed: ${escMd(phTime(order.rejectedAt))}\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `If you believe this is an error,\n` +
-    `contact support with your payment screenshot\.`,
-    { parse_mode: "MarkdownV2" }
+    `<b>Order Declined</b>\n\n` +
+    `Your payment could not be verified.\n\n` +
+    `Order ID: <code>${h(orderId)}</code>\n` +
+    `Reviewed: ${h(phTime(order.rejectedAt))}\n\n` +
+    `If you believe this is an error, contact support with your payment screenshot.`,
+    HTML
   );
 }
 
@@ -457,7 +440,6 @@ bot.on("polling_error", (err) => console.error("Polling error:", err.message));
 // ─── EXPRESS API ─────────────────────────────────────────────────────────────
 const app = express();
 
-// CORS — must be ABSOLUTE FIRST
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -469,12 +451,10 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Admin panel — serve index.html at root and /admin
-app.get("/",      (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-app.get("/admin", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-app.get("/health",(req, res) => res.json({ status: "ok", bot: "running", uptime: process.uptime() }));
+app.get("/",       (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/admin",  (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime() }));
 
-// Bot info
 app.get("/api/botinfo", async (req, res) => {
   try {
     const info = await bot.getMe();
@@ -482,34 +462,24 @@ app.get("/api/botinfo", async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-// Orders
 app.get("/api/orders", async (req, res) => {
-  try {
-    const db = await getDB();
-    res.json(Object.values(db.orders).reverse());
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { const db = await getDB(); res.json(Object.values(db.orders).reverse()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/orders/:id/approve", async (req, res) => {
-  try {
-    await processApproval(req.params.id, ADMIN_ID, null);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { await processApproval(req.params.id, ADMIN_ID, null); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/orders/:id/reject", async (req, res) => {
-  try {
-    await processRejection(req.params.id, ADMIN_ID, null);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { await processRejection(req.params.id, ADMIN_ID, null); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Products
 app.get("/api/products", async (req, res) => {
-  try {
-    const db = await getDB();
-    res.json(Object.values(db.products));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { const db = await getDB(); res.json(Object.values(db.products)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/products", async (req, res) => {
@@ -518,7 +488,11 @@ app.post("/api/products", async (req, res) => {
     const { name, price, emoji, description, category } = req.body;
     if (!name || !price) return res.status(400).json({ error: "name and price required" });
     const pid = `PROD-${Date.now()}`;
-    db.products[pid] = { id: pid, name, price: Number(price), emoji: emoji || "🔑", description: description || "", category: category || "Other", active: true };
+    db.products[pid] = {
+      id: pid, name, price: Number(price),
+      emoji: emoji || "🔑", description: description || "",
+      category: category || "Other", active: true
+    };
     await saveDB(db);
     res.json(db.products[pid]);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -534,12 +508,9 @@ app.delete("/api/products/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Keys
 app.get("/api/keys/:productId", async (req, res) => {
-  try {
-    const db = await getDB();
-    res.json({ keys: db.keys[req.params.productId] || [] });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { const db = await getDB(); res.json({ keys: db.keys[req.params.productId] || [] }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/keys/:productId", async (req, res) => {
@@ -563,7 +534,6 @@ app.delete("/api/keys/:productId", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Broadcast
 app.post("/api/broadcast", async (req, res) => {
   try {
     const db = await getDB();
@@ -579,38 +549,20 @@ app.post("/api/broadcast", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// When using webhooks the bot already binds to PORT internally.
-// We attach Express as middleware on that same server instead of calling app.listen().
+// ─── SERVER START ─────────────────────────────────────────────────────────────
 if (WEBHOOK_HOST) {
-  // Route Telegram webhook updates through the bot, everything else through Express
-  bot.expressApp = app; // node-telegram-bot-api exposes this when webHook.port is set
-  const botServer = bot.getWebHook ? bot._webHook : null;
-  // Safe fallback: start Express on PORT+1 for the admin panel
   const ADMIN_PORT = Number(PORT) + 1;
   app.listen(ADMIN_PORT, () => {
-    console.log(`🚀 Admin panel on port ${ADMIN_PORT}`);
-    console.log(`🤖 Webhook bot active`);
-    startKeepAlive(ADMIN_PORT);
+    console.log(`Admin panel: port ${ADMIN_PORT}`);
+    console.log(`Webhook bot active`);
+    // Silent keep-alive ping every 5 min
+    const url = `https://${WEBHOOK_HOST}/health`;
+    setInterval(() => {
+      require("https").get(url, () => {}).on("error", () => {});
+    }, 5 * 60 * 1000);
   });
 } else {
   app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🤖 Bot polling (local dev mode)`);
-    startKeepAlive(PORT);
+    console.log(`Server: port ${PORT} (polling mode)`);
   });
-}
-
-function startKeepAlive(port) {
-  const SELF_URL = process.env.RAILWAY_PUBLIC_DOMAIN
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/health`
-    : `http://localhost:${port}/health`;
-
-  setInterval(() => {
-    try {
-      const http = require("http"), https = require("https");
-      const lib = SELF_URL.startsWith("https") ? https : http;
-      // Silent ping — no console.log to avoid Railway log rate limit
-      lib.get(SELF_URL, () => {}).on("error", () => {});
-    } catch(e) { /* ignore */ }
-  }, 5 * 60 * 1000); // every 5 minutes
 }
