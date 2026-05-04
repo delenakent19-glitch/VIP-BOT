@@ -13,7 +13,7 @@ const path        = require("path");
 const BOT_TOKEN  = process.env.BOT_TOKEN;
 const ADMIN_ID   = process.env.ADMIN_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID || "";
-const PORT       = process.env.PORT || 3000;
+const PORT       = process.env.PORT || 8080;
 const DB_FILE    = "./data/db.json";
 
 if (!BOT_TOKEN || !ADMIN_ID) {
