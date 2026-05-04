@@ -39,17 +39,10 @@ async function saveDB(db) {
 }
 
 // ─── BOT ─────────────────────────────────────────────────────────────────────
+// On Railway: use webhook via Express (single port for both admin + webhook).
+// Locally: use polling.
 const WEBHOOK_HOST = process.env.RAILWAY_PUBLIC_DOMAIN;
-const bot = WEBHOOK_HOST
-  ? new TelegramBot(BOT_TOKEN, { webHook: { port: PORT } })
-  : new TelegramBot(BOT_TOKEN, { polling: true });
-
-if (WEBHOOK_HOST) {
-  const webhookUrl = `https://${WEBHOOK_HOST}/bot${BOT_TOKEN}`;
-  bot.setWebHook(webhookUrl)
-    .then(() => console.log("Webhook set OK"))
-    .catch(e  => console.error("Webhook error:", e.message));
-}
+const bot = new TelegramBot(BOT_TOKEN, { polling: !WEBHOOK_HOST });
 
 const userState = {};
 
@@ -550,19 +543,32 @@ app.post("/api/broadcast", async (req, res) => {
 });
 
 // ─── SERVER START ─────────────────────────────────────────────────────────────
-if (WEBHOOK_HOST) {
-  const ADMIN_PORT = Number(PORT) + 1;
-  app.listen(ADMIN_PORT, () => {
-    console.log(`Admin panel: port ${ADMIN_PORT}`);
-    console.log(`Webhook bot active`);
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}`);
+
+  if (WEBHOOK_HOST) {
+    // Register the webhook endpoint on Express — same port as admin panel
+    const webhookPath = `/webhook/${BOT_TOKEN}`;
+    app.post(webhookPath, (req, res) => {
+      bot.processUpdate(req.body);
+      res.sendStatus(200);
+    });
+
+    // Tell Telegram where to send updates
+    const webhookUrl = `https://${WEBHOOK_HOST}${webhookPath}`;
+    try {
+      await bot.setWebHook(webhookUrl);
+      console.log(`Webhook set: ${webhookUrl}`);
+    } catch(e) {
+      console.error("Webhook error:", e.message);
+    }
+
     // Silent keep-alive ping every 5 min
-    const url = `https://${WEBHOOK_HOST}/health`;
     setInterval(() => {
-      require("https").get(url, () => {}).on("error", () => {});
+      require("https").get(`https://${WEBHOOK_HOST}/health`, () => {}).on("error", () => {});
     }, 5 * 60 * 1000);
-  });
-} else {
-  app.listen(PORT, () => {
-    console.log(`Server: port ${PORT} (polling mode)`);
-  });
-}
+
+  } else {
+    console.log("Polling mode (local dev)");
+  }
+});
