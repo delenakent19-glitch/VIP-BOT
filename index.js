@@ -460,4 +460,18 @@ app.post("/api/broadcast", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🤖 Bot is running — @${BOT_TOKEN.split(":")[0]}`);
+
+  // ── KEEP-ALIVE: ping self every 5 min so Railway never sleeps ──────────────
+  const SELF_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/health`
+    : `http://localhost:${PORT}/health`;
+
+  setInterval(async () => {
+    try {
+      const http = require("http"), https = require("https");
+      const lib = SELF_URL.startsWith("https") ? https : http;
+      lib.get(SELF_URL, (r) => console.log(`♻️  Keep-alive ping → ${r.statusCode}`))
+         .on("error", (e) => console.warn("Keep-alive error:", e.message));
+    } catch(e) { console.warn("Keep-alive error:", e.message); }
+  }, 5 * 60 * 1000); // every 5 minutes
 });
