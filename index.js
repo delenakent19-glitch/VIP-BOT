@@ -1,7 +1,7 @@
 /**
  * KEY SELLER BOT — Railway Deployment
  * Upload: index.js + package.json to GitHub → connect to Railway
- * Variables: BOT_TOKEN, ADMIN_ID, GCASH_NUMBER, GCASH_NAME
+ * Variables: BOT_TOKEN, ADMIN_ID, QR_FILE_ID
  */
 
 require("dotenv").config();
@@ -30,6 +30,7 @@ async function getDB() {
   if (!db.products) db.products = {};
   if (!db.orders)   db.orders   = {};
   if (!db.keys)     db.keys     = {};
+  if (!db.settings) db.settings = {};
   return db;
 }
 
@@ -81,10 +82,10 @@ bot.onText(/\/start/, async (msg) => {
       `<b>╔══════════════════════╗</b>\n` +
       `<b>   🛒 ZEIJIE ORDER BOT 🛒   </b>\n` +
       `<b>╚══════════════════════╝</b>\n\n` +
-      `👋 Hey, <b>${h(name)}!</b> Welcome back!\n\n` +
+      `👋 Hey, <b>${h(name)}!</b> Welcome!\n\n` +
       `<b>━━━━━ WHAT WE OFFER ━━━━━</b>\n` +
-      `  ⚡  Instant key delivery\n` +
-      `  💳  GCash payment accepted\n` +
+      `  ⚡  Instant delivery\n` +
+      `  📦  Container or Modded APK\n` +
       `  🔒  Fast, secure and reliable\n\n` +
       `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
       `👇 Tap <b>Buy Key</b> to browse products!`,
@@ -114,14 +115,16 @@ async function sendHelp(chatId) {
       `<b>╚══════════════════════╝</b>\n\n` +
       `<b>1️⃣ BROWSE</b>\n` +
       `     Tap Buy Key and pick a product.\n\n` +
-      `<b>2️⃣ PAY</b>\n` +
-      `     Send payment via GCash. 💳\n\n` +
-      `<b>3️⃣ SCREENSHOT</b>\n` +
+      `<b>2️⃣ CHOOSE TYPE</b>\n` +
+      `     Select Container or Modded APK.\n\n` +
+      `<b>3️⃣ PAY</b>\n` +
+      `     Scan the QR code and send payment. 💳\n\n` +
+      `<b>4️⃣ SCREENSHOT</b>\n` +
       `     Send your payment proof here. 📸\n\n` +
-      `<b>4️⃣ WAIT</b>\n` +
+      `<b>5️⃣ WAIT</b>\n` +
       `     Admin reviews in ~5 minutes. ⏳\n\n` +
-      `<b>5️⃣ RECEIVE</b>\n` +
-      `     Key delivered here instantly! 🔑\n\n` +
+      `<b>6️⃣ RECEIVE</b>\n` +
+      `     Your key/APK delivered here instantly! 🔑\n\n` +
       `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
       `❓ Questions? Contact the admin directly.`,
       HTML
@@ -282,30 +285,71 @@ bot.on("callback_query", async (query) => {
         );
       }
 
-      userState[chatId] = { step: "awaiting_screenshot", selectedProduct: product };
       await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: msgId }).catch(() => {});
 
-      const gcashNum  = h(process.env.GCASH_NUMBER || "09XX-XXX-XXXX");
-      const gcashName = h(process.env.GCASH_NAME   || "Admin");
-      const hasApk    = !!product.apkFileId;
-
+      // Ask user to choose: Container or Modded APK
       await bot.sendMessage(chatId,
+        `<b>╔══════════════════════╗</b>\n` +
+        `<b>   📂 SELECT CATEGORY   </b>\n` +
+        `<b>╚══════════════════════╝</b>\n\n` +
+        `  🎮 Product : <b>${h(product.name)}</b>\n` +
+        `  💰 Price   : <b>P${product.price}</b>\n\n` +
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+        `Please choose how you want to receive your product:`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "📦 Container",   callback_data: `cat_container_${pid}` },
+              { text: "🤖 Modded APK",  callback_data: `cat_modapk_${pid}`    }
+            ]]
+          }
+        }
+      );
+    }
+
+    if (data.startsWith("cat_")) {
+      // cat_container_PRODID  or  cat_modapk_PRODID
+      const parts    = data.split("_");
+      const category = parts[1];           // "container" or "modapk"
+      const pid      = parts.slice(2).join("_");
+      const db       = await getDB();
+      const product  = db.products[pid];
+      if (!product) return bot.sendMessage(chatId, "Product not found.");
+
+      const keysLeft = (db.keys[pid] || []).length;
+      if (keysLeft === 0) {
+        return bot.sendMessage(chatId,
+          `<b>Out of stock.</b> Please try another product.`, HTML
+        );
+      }
+
+      userState[chatId] = { step: "awaiting_screenshot", selectedProduct: product, selectedCategory: category };
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: msgId }).catch(() => {});
+
+      const dbSettings = await getDB().catch(()=>({settings:{}}));
+      const qrFileId   = dbSettings.settings?.qrFileId || process.env.QR_FILE_ID || null;
+      const catLabel  = category === "modapk" ? "🤖 Modded APK" : "📦 Container";
+
+      const summaryText =
         `<b>╔══════════════════════╗</b>\n` +
         `<b>   🧾 ORDER SUMMARY 🧾   </b>\n` +
         `<b>╚══════════════════════╝</b>\n\n` +
-        `  🎮 Product : <b>${h(product.name)}</b>\n` +
-        `  💰 Price   : <b>P${product.price}</b>\n` +
-        `  📦 Stock   : ${keysLeft} key${keysLeft !== 1 ? "s" : ""} left\n` +
-        (hasApk ? `  📲 Includes : <b>APK + Key</b>\n` : ``) +
-        `\n<b>━━━ 💳 PAYMENT DETAILS 💳 ━━━</b>\n\n` +
-        `Send <b>P${product.price}</b> via GCash to:\n\n` +
-        `  📱 Number : <code>${gcashNum}</code>\n` +
-        `  👤 Name   : <b>${gcashName}</b>\n\n` +
+        `  🎮 Product  : <b>${h(product.name)}</b>\n` +
+        `  📂 Category : <b>${catLabel}</b>\n` +
+        `  💰 Price    : <b>P${product.price}</b>\n` +
+        `  📦 Stock    : ${keysLeft} key${keysLeft !== 1 ? "s" : ""} left\n\n` +
+        `<b>━━━ 💳 PAYMENT QR CODE 💳 ━━━</b>\n\n` +
+        `Scan the QR code below and send <b>P${product.price}</b>.\n\n` +
         `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
-        `📸 Send your <b>payment screenshot</b> here.\n` +
-        (hasApk ? `🔑 Key + 📦 APK auto-delivered after verification.` : `🔑 Key delivered after verification.`),
-        HTML
-      );
+        `📸 After paying, send your <b>payment screenshot</b> here.\n` +
+        `🔑 Your key will be delivered after verification.`;
+
+      if (qrFileId) {
+        await bot.sendPhoto(chatId, qrFileId, { caption: summaryText, parse_mode: "HTML" });
+      } else {
+        await bot.sendMessage(chatId, summaryText, HTML);
+      }
     }
 
     if (data.startsWith("approve_")) {
@@ -322,10 +366,11 @@ bot.on("callback_query", async (query) => {
 
 // ─── HANDLE PAYMENT ───────────────────────────────────────────────────────────
 async function handlePayment(msg, state) {
-  const chatId  = msg.chat.id;
-  const product = state.selectedProduct;
-  const db      = await getDB();
-  const orderId = `ORD-${Date.now()}`;
+  const chatId   = msg.chat.id;
+  const product  = state.selectedProduct;
+  const category = state.selectedCategory || "container";
+  const db       = await getDB();
+  const orderId  = `ORD-${Date.now()}`;
 
   const order = {
     id:          orderId,
@@ -335,6 +380,7 @@ async function handlePayment(msg, state) {
     productId:   product.id,
     productName: product.name,
     amount:      product.price,
+    category:    category,
     status:      "pending",
     screenshotFileId: msg.photo
       ? msg.photo[msg.photo.length - 1].file_id
@@ -360,7 +406,7 @@ async function handlePayment(msg, state) {
     HTML
   );
 
-  // Notify admin
+  const catLabel = category === "modapk" ? "🤖 Modded APK" : "📦 Container";
   const adminMsg =
     `<b>╔══════════════════════╗</b>\n` +
     `<b>   🔔 NEW ORDER! 🔔   </b>\n` +
@@ -368,6 +414,7 @@ async function handlePayment(msg, state) {
     `  👤 Buyer    : ${h(order.buyerUser)}\n` +
     `  🆔 User ID  : <code>${chatId}</code>\n` +
     `  🎮 Product  : <b>${h(product.name)}</b>\n` +
+    `  📂 Category : <b>${catLabel}</b>\n` +
     `  💰 Amount   : <b>P${product.price}</b>\n` +
     `  📋 Order ID : <code>${h(orderId)}</code>\n` +
     `  📅 Time     : ${h(phTime(order.createdAt))}\n\n` +
@@ -425,36 +472,45 @@ async function processApproval(orderId, adminChatId, msgId) {
   }
 
   const product = db.products[order.productId];
-  const apkFileId = product?.apkFileId || null;
+  const apkDownloadLink = product?.apkDownloadLink || null;
+  const isModApk = order.category === "modapk";
 
-  // Send key message to buyer
-  await bot.sendMessage(order.buyerId,
-    `<b>╔══════════════════════╗</b>\n` +
-    `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
-    `<b>╚══════════════════════╝</b>\n\n` +
-    `Your order for <b>${h(order.productName)}</b> is ready!\n\n` +
-    `<b>━━━━━ 🔑 YOUR KEY 🔑 ━━━━━</b>\n` +
-    `<code>${h(key)}</code>\n` +
-    `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    (apkFileId ? `📦 APK file is attached below.\n` : ``) +
-    `  ✅ Approved: ${h(phTime(order.approvedAt))}\n\n` +
-    `👆 Tap the key above to copy it.\n💙 Thank you for your purchase!`,
-    HTML
-  );
-
-  // Auto-send APK if product has one attached
-  if (apkFileId) {
-    await bot.sendDocument(order.buyerId, apkFileId, {
-      caption:
-        `<b>📦 APK — ${h(order.productName)}</b>\n` +
-        `Download and install this file to use your key.`,
-      parse_mode: "HTML"
-    });
+  // Send delivery message to buyer
+  if (isModApk && apkDownloadLink) {
+    // Modded APK: send download link
+    await bot.sendMessage(order.buyerId,
+      `<b>╔══════════════════════╗</b>\n` +
+      `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
+      `<b>╚══════════════════════╝</b>\n\n` +
+      `Your order for <b>${h(order.productName)}</b> is ready!\n\n` +
+      `<b>━━━ 🤖 MODDED APK LINK 🤖 ━━━</b>\n` +
+      `${apkDownloadLink}\n` +
+      `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+      `<b>🔑 Your Key:</b>\n` +
+      `<code>${h(key)}</code>\n\n` +
+      `  ✅ Approved: ${h(phTime(order.approvedAt))}\n\n` +
+      `👆 Tap the key above to copy it.\n💙 Thank you for your purchase!`,
+      HTML
+    );
+  } else {
+    // Container (or no APK link): send key only
+    await bot.sendMessage(order.buyerId,
+      `<b>╔══════════════════════╗</b>\n` +
+      `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
+      `<b>╚══════════════════════╝</b>\n\n` +
+      `Your order for <b>${h(order.productName)}</b> is ready!\n\n` +
+      `<b>━━━━━ 🔑 YOUR KEY 🔑 ━━━━━</b>\n` +
+      `<code>${h(key)}</code>\n` +
+      `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+      `  ✅ Approved: ${h(phTime(order.approvedAt))}\n\n` +
+      `👆 Tap the key above to copy it.\n💙 Thank you for your purchase!`,
+      HTML
+    );
   }
 
   await bot.sendMessage(adminChatId,
     `✅ Delivered to ${h(order.buyerUser)}\n🔑 Key: <code>${h(key)}</code>` +
-    (apkFileId ? `\n📦 APK: sent` : ``),
+    (isModApk && apkDownloadLink ? `\n🤖 APK link sent` : ``),
     HTML
   );
 }
@@ -553,14 +609,14 @@ app.post("/api/products", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Store APK file_id for a product (uploaded via Telegram by admin)
+// Store APK download link for a product (Modded APK category)
 app.put("/api/products/:id/apk", async (req, res) => {
   try {
     const db = await getDB();
     const p = db.products[req.params.id];
     if (!p) return res.status(404).json({ error: "not found" });
-    p.apkFileId   = req.body.apkFileId || null;
-    p.apkFileName = req.body.apkFileName || null;
+    p.apkDownloadLink = req.body.apkDownloadLink || null;
+    p.apkFileName     = req.body.apkFileName || null;
     await saveDB(db);
     res.json(p);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -627,6 +683,22 @@ app.post("/api/broadcast", async (req, res) => {
       } catch { failed++; }
     }
     res.json({ sent, failed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put("/api/settings/qr", async (req, res) => {
+  try {
+    const db = await getDB();
+    db.settings.qrFileId = req.body.qrFileId || null;
+    await saveDB(db);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/settings", async (req, res) => {
+  try {
+    const db = await getDB();
+    res.json(db.settings || {});
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

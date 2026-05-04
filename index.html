@@ -217,6 +217,7 @@ html,body{height:100%;font-family:'Space Grotesk',sans-serif;background:var(--bg
       <div class="nav-item"        onclick="goto('products')"  id="nav-products">  <span class="nav-icon">📦</span>Products</div>
       <div class="nav-item"        onclick="goto('keys')"      id="nav-keys">      <span class="nav-icon">🔑</span>Keys</div>
       <div class="nav-item"        onclick="goto('broadcast')" id="nav-broadcast"> <span class="nav-icon">📡</span>Broadcast</div>
+      <div class="nav-item"        onclick="goto('settings')"  id="nav-settings">  <span class="nav-icon">⚙️</span>Settings</div>
     </nav>
     <div class="sf">
       <div style="color:var(--green);margin-bottom:2px"><span class="online-dot"></span>BOT CONNECTED</div>
@@ -350,6 +351,34 @@ html,body{height:100%;font-family:'Space Grotesk',sans-serif;background:var(--bg
         </div>
       </div>
     </div>
+
+    <div id="page-settings" class="content" style="display:none">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">💳 Payment QR Code</div>
+        </div>
+        <p style="font-size:12px;color:var(--muted2);margin-bottom:14px;line-height:1.6">
+          Upload your GCash / payment QR code image. It will be shown to buyers when they place an order.<br>
+          Send the QR image to your bot first, then copy its Telegram File ID below.
+        </p>
+        <div id="qr-preview-wrap" style="display:none;margin-bottom:14px;text-align:center">
+          <div style="font-size:11px;font-weight:700;color:var(--accent2);letter-spacing:.7px;text-transform:uppercase;margin-bottom:8px">Current QR Preview</div>
+          <img id="qr-preview-img" src="" alt="QR Code" style="max-width:200px;border-radius:10px;border:1px solid var(--border2)"/>
+        </div>
+        <div class="fg" style="margin-bottom:10px">
+          <label>QR Code Telegram File ID</label>
+          <input class="finput" id="qr-fileid" placeholder="AgACAgUAAxkB..." autocomplete="off" spellcheck="false"/>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace">
+            Send your QR image to @userinfobot or your bot → copy the file_id here
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-accent" onclick="saveQR()" style="flex:1">💾 Save QR Code</button>
+          <button class="btn btn-danger btn-sm" onclick="removeQR()">🗑 Remove</button>
+        </div>
+        <div id="qr-status" style="display:none;margin-top:10px;font-size:12px;font-family:'JetBrains Mono',monospace"></div>
+      </div>
+    </div>
   </div>
 </div>
 </div>
@@ -470,9 +499,10 @@ async function tgSend(chatId, text) {
 // ── LOAD ─────────────────────────────────────────────────────────────────────
 async function loadAll() {
   try {
-    const [ords, prods] = await Promise.all([af("/orders"), af("/products")]);
+    const [ords, prods, setts] = await Promise.all([af("/orders"), af("/products"), af("/settings").catch(()=>({}))]);
     orders   = Array.isArray(ords)  ? ords  : [];
     products = Array.isArray(prods) ? prods : [];
+    if (setts.qrFileId) localStorage.setItem("kb_qr_fileid", setts.qrFileId);
     keyMap={};
     await Promise.all(products.map(async p => {
       const r = await af("/keys/"+p.id).catch(()=>({keys:[]}));
@@ -524,12 +554,13 @@ function goto(page) {
   curPage=page;
   document.querySelectorAll(".nav-item").forEach(el=>el.classList.remove("active"));
   document.getElementById("nav-"+page).classList.add("active");
-  ["orders","products","keys","broadcast"].forEach(p=>{
+  ["orders","products","keys","broadcast","settings"].forEach(p=>{
     document.getElementById("page-"+p).style.display=p===page?"flex":"none";
   });
-  document.getElementById("ptitle").textContent={orders:"Orders",products:"Products",keys:"Keys",broadcast:"Broadcast"}[page];
+  document.getElementById("ptitle").textContent={orders:"Orders",products:"Products",keys:"Keys",broadcast:"Broadcast",settings:"Settings"}[page];
   closeSidebar(); renderPage();
   if(page==="broadcast") updateBcCount();
+  if(page==="settings") loadQRSettings();
 }
 
 function renderPage() {
@@ -558,6 +589,11 @@ function renderOrders() {
         <span class="badge-status bs-${o.status}">${o.status.toUpperCase()}</span>
       </div>
       <div class="oc-mid"><div class="oc-prod">${esc(o.productName)}</div><div class="oc-amt">₱${o.amount}</div></div>
+      <div style="margin-bottom:6px">
+        ${o.category==="modapk"
+          ?'<span style="font-size:9px;font-weight:700;background:rgba(167,139,250,.1);color:var(--purple);border:1px solid rgba(167,139,250,.2);border-radius:20px;padding:2px 7px;font-family:JetBrains Mono,monospace">🤖 MODDED APK</span>'
+          :'<span style="font-size:9px;font-weight:700;background:rgba(34,211,238,.08);color:var(--cyan);border:1px solid rgba(34,211,238,.2);border-radius:20px;padding:2px 7px;font-family:JetBrains Mono,monospace">📦 CONTAINER</span>'}
+      </div>
       ${o.key?`<div class="oc-key"><span class="key-chip">🔑 ${esc(o.key)}</span></div>`:""}
       <div class="oc-bot">
         <div class="oc-time">${fmtDate(o.createdAt)}</div>
@@ -618,7 +654,7 @@ function renderProducts() {
           <div class="prod-price">₱${p.price}</div>
           <div class="prod-actions">
             <button class="btn btn-outline btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Keys</button>
-            <button class="btn btn-outline btn-sm" onclick="openApkModal('${p.id}','${esc(p.name)}')" title="Attach APK file" style="${p.apkFileId?'color:var(--green);border-color:rgba(34,211,165,.3)':''}">${p.apkFileId?'📦 APK ✓':'📦 APK'}</button>
+            <button class="btn btn-outline btn-sm" onclick="openApkModal('${p.id}','${esc(p.name)}')" title="Set Modded APK download link" style="${p.apkDownloadLink?'color:var(--green);border-color:rgba(34,211,165,.3)':''}">${p.apkDownloadLink?'🤖 APK ✓':'🤖 APK'}</button>
             <button class="btn btn-outline btn-sm" onclick="toggleProd('${p.id}',${!isActive})" title="${isActive?'Hide from bot':'Show in bot'}">${isActive?'🙈':'👁'}</button>
             <button class="btn btn-danger  btn-sm" onclick="delProd('${p.id}')">🗑</button>
           </div>
@@ -645,103 +681,56 @@ function openApkModal(pid, pname) {
   document.getElementById("modal").style.display="flex";
   const inn = document.getElementById("modal-inner");
   inn.innerHTML=`
-    <div class="modal-title">📦 APK File — ${esc(pname)}</div>
+    <div class="modal-title">🤖 Modded APK Link — ${esc(pname)}</div>
     <p style="font-size:12px;color:var(--muted2);margin-bottom:14px">
-      Upload the APK once. It will be <b style="color:var(--text)">auto-delivered together with the key</b> every time an order is approved.
+      Enter the download link for the Modded APK. This link will be sent to buyers who select <b style="color:var(--text)">Modded APK</b> as their category after approval.
     </p>
-    ${prod.apkFileId ? `
+    ${prod.apkDownloadLink ? `
     <div style="background:rgba(34,211,165,.07);border:1px solid rgba(34,211,165,.2);border-radius:9px;padding:12px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
-      <div style="font-size:22px">📦</div>
-      <div>
-        <div style="font-size:12px;font-weight:600;color:var(--green)">APK Attached</div>
-        <div style="font-size:11px;color:var(--muted2);font-family:'JetBrains Mono',monospace;margin-top:2px">${esc(prod.apkFileName||"apk file")}</div>
+      <div style="font-size:22px">🤖</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600;color:var(--green)">APK Link Saved</div>
+        <div style="font-size:10px;color:var(--muted2);font-family:'JetBrains Mono',monospace;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(prod.apkDownloadLink)}</div>
       </div>
-      <button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="removeApk('${pid}')">🗑 Remove</button>
+      <button class="btn btn-danger btn-sm" style="margin-left:auto;flex-shrink:0" onclick="removeApk('${pid}')">🗑 Remove</button>
     </div>` : `
     <div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.2);border-radius:9px;padding:12px;margin-bottom:12px;font-size:12px;color:var(--yellow)">
-      ⚠️ No APK attached yet. Upload below.
+      ⚠️ No APK download link set yet. Add one below.
     </div>`}
-    <div class="fg" style="margin-bottom:12px">
-      <label>Upload APK via Telegram</label>
-      <p style="font-size:11px;color:var(--muted2);margin-top:4px;line-height:1.6">
-        1. Send the APK file to your bot in Telegram.<br>
-        2. Copy the <b style="color:var(--text)">File ID</b> from the bot's response below.<br>
-        3. Or use the Upload button to send via the panel.
-      </p>
-    </div>
     <div class="fg" style="margin-bottom:4px">
-      <label>File Name (display)</label>
-      <input class="finput" id="apk-name" placeholder="game-v1.0.apk" value="${esc(prod.apkFileName||'')}"/>
+      <label>APK File Name (display)</label>
+      <input class="finput" id="apk-name" placeholder="game-modded-v1.0.apk" value="${esc(prod.apkFileName||'')}"/>
     </div>
     <div class="fg" style="margin-bottom:12px">
-      <label>Telegram File ID</label>
-      <input class="finput" id="apk-fileid" placeholder="BQACAgUAAxkB..." value="${esc(prod.apkFileId||'')}"/>
-      <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace">Get this by sending the APK to @userinfobot or your bot</div>
-    </div>
-    <div style="background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.15);border-radius:9px;padding:12px;margin-bottom:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--accent2);margin-bottom:6px">📤 Upload APK File Directly</div>
-      <input type="file" id="apk-file-input" accept=".apk,.zip" style="display:none" onchange="uploadApkFile('${pid}',this)"/>
-      <button class="btn btn-outline btn-sm" onclick="document.getElementById('apk-file-input').click()">📁 Choose APK File</button>
-      <span id="apk-upload-status" style="font-size:11px;color:var(--muted2);margin-left:8px;font-family:'JetBrains Mono',monospace"></span>
+      <label>Download Link</label>
+      <input class="finput" id="apk-link" placeholder="https://drive.google.com/..." value="${esc(prod.apkDownloadLink||'')}"/>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace">Google Drive, MediaFire, Mega, etc.</div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-accent" onclick="saveApk('${pid}')">💾 Save APK</button>
+      <button class="btn btn-accent" onclick="saveApk('${pid}')">💾 Save Link</button>
     </div>`;
 }
 
-async function uploadApkFile(pid, input) {
-  const file = input.files[0];
-  if (!file) return;
-  const status = document.getElementById("apk-upload-status");
 
-  const adminId = localStorage.getItem("kb_admin_id");
-  if (!adminId) {
-    status.textContent = "❌ Admin ID not loaded yet — try reconnecting.";
-    status.style.color = "var(--red)";
-    return;
-  }
 
-  status.textContent = "⏳ Uploading...";
-  status.style.color = "var(--yellow)";
-  try {
-    const formData = new FormData();
-    formData.append("chat_id", adminId);
-    formData.append("document", file, file.name);
-    formData.append("caption", `📦 APK uploaded via admin panel
-Product ID: ${pid}`);
-    const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendDocument`, {
-      method: "POST", body: formData
-    });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.description || "Upload failed");
-    const fileId = d.result.document.file_id;
-    document.getElementById("apk-fileid").value = fileId;
-    document.getElementById("apk-name").value = file.name;
-    status.textContent = "✅ Uploaded! Click Save APK.";
-    status.style.color = "var(--green)";
-  } catch(e) {
-    status.textContent = "❌ " + e.message;
-    status.style.color = "var(--red)";
-  }
-}
 
 async function saveApk(pid) {
-  const apkFileId   = document.getElementById("apk-fileid").value.trim();
-  const apkFileName = document.getElementById("apk-name").value.trim() || "app.apk";
-  if (!apkFileId) { showToast("⚠️ Enter a File ID or upload a file first."); return; }
+  const apkDownloadLink = document.getElementById("apk-link").value.trim();
+  const apkFileName     = document.getElementById("apk-name").value.trim() || "modded-app.apk";
+  if (!apkDownloadLink) { showToast("⚠️ Enter a download link first."); return; }
   try {
-    await af("/products/"+pid+"/apk","PUT",{apkFileId, apkFileName});
-    showToast("✅ APK saved! Will auto-deliver with every key.");
+    await af("/products/"+pid+"/apk","PUT",{apkDownloadLink, apkFileName});
+    showToast("✅ APK link saved! Sent to Modded APK buyers after approval.");
     closeModal(); await loadAll();
   } catch { showToast("❌ Failed."); }
 }
 
 async function removeApk(pid) {
-  if (!confirm("Remove APK from this product?")) return;
+  if (!confirm("Remove APK link from this product?")) return;
   try {
-    await af("/products/"+pid+"/apk","PUT",{apkFileId:null, apkFileName:null});
-    showToast("🗑️ APK removed.");
+    await af("/products/"+pid+"/apk","PUT",{apkDownloadLink:null, apkFileName:null});
+    showToast("🗑️ APK link removed.");
     closeModal(); await loadAll();
   } catch { showToast("❌ Failed."); }
 }
@@ -774,14 +763,14 @@ function renderKeys() {
           <div>
             <div class="card-title">${p.emoji||"🔑"} ${esc(p.name)} <span style="color:var(--muted);font-size:10px;font-weight:400">(${stockCount} keys)</span></div>
             <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:2px">₱${p.price}
-              ${p.apkFileId
-                ? ` &nbsp;·&nbsp; <span style="color:var(--green)">📦 APK attached</span>`
-                : ` &nbsp;·&nbsp; <span style="color:var(--muted)">📦 No APK</span>`}
+              ${p.apkDownloadLink
+                ? ` &nbsp;·&nbsp; <span style="color:var(--green)">🤖 APK link set</span>`
+                : ` &nbsp;·&nbsp; <span style="color:var(--muted)">🤖 No APK link</span>`}
             </div>
           </div>
           <div style="display:flex;gap:5px">
             <button class="btn btn-accent btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Add</button>
-            <button class="btn btn-outline btn-sm" style="${p.apkFileId?'color:var(--green);border-color:rgba(34,211,165,.3)':''}" onclick="openApkModal('${p.id}','${esc(p.name)}')">${p.apkFileId?'📦 ✓':'📦 APK'}</button>
+            <button class="btn btn-outline btn-sm" style="${p.apkDownloadLink?'color:var(--green);border-color:rgba(34,211,165,.3)':''}" onclick="openApkModal('${p.id}','${esc(p.name)}')">${p.apkDownloadLink?'🤖 ✓':'🤖 APK'}</button>
             <button class="btn btn-danger btn-sm" onclick="clearKeys('${p.id}')">Clear</button>
           </div>
         </div>
@@ -832,8 +821,8 @@ function bpreview(el) {
 
 function insertTemplate(type) {
   const templates = {
-    restock: "📦 RESTOCK ALERT!\n\nBag na! Bagong keys available na para sa [PRODUCT]!\n\n🔑 Available ngayon — limited slots lang!\nType /start para mag-order. 🚀",
-    promo:   "🔥 PROMO ALERT!\n\nLimited time offer — [PRODUCT] sa espesyal na presyo!\n\n⏰ Ngayong araw lang to!\nType /start para ma-grab. 💥"
+    restock: "📦 RESTOCK ALERT!\n\nNew keys are now available for [PRODUCT]!\n\n🔑 Available now — limited slots only!\nType /start to place an order. 🚀",
+    promo:   "🔥 PROMO ALERT!\n\nLimited time offer — [PRODUCT] at a special price!\n\n⏰ Today only!\nType /start to grab yours. 💥"
   };
   const el = document.getElementById("bmsg");
   el.value = templates[type] || "";
@@ -879,6 +868,44 @@ async function sendBcast() {
   document.getElementById("bprev").style.display = "none";
   btn.disabled = false;
   setTimeout(() => { prog.style.display = "none"; bar.style.width = "0%"; }, 4000);
+}
+
+// ── QR CODE SETTINGS ─────────────────────────────────────────────────────────
+function loadQRSettings() {
+  const saved = localStorage.getItem("kb_qr_fileid") || "";
+  document.getElementById("qr-fileid").value = saved;
+  const wrap = document.getElementById("qr-preview-wrap");
+  if (saved) {
+    // Show preview using Telegram file URL (requires bot token)
+    wrap.style.display = "block";
+  } else {
+    wrap.style.display = "none";
+  }
+}
+
+async function saveQR() {
+  const fileId = document.getElementById("qr-fileid").value.trim();
+  const status = document.getElementById("qr-status");
+  if (!fileId) { showToast("⚠️ Enter a File ID first."); return; }
+  localStorage.setItem("kb_qr_fileid", fileId);
+  // Also save to server so index.js can use it
+  try {
+    await af("/settings/qr","PUT",{qrFileId: fileId});
+  } catch {}
+  status.style.display = "block";
+  status.style.color = "var(--green)";
+  status.textContent = "✅ QR code saved! Buyers will see it when ordering.";
+  document.getElementById("qr-preview-wrap").style.display = "block";
+  showToast("✅ QR code saved!");
+}
+
+async function removeQR() {
+  if (!confirm("Remove QR code?")) return;
+  localStorage.removeItem("kb_qr_fileid");
+  document.getElementById("qr-fileid").value = "";
+  document.getElementById("qr-preview-wrap").style.display = "none";
+  try { await af("/settings/qr","PUT",{qrFileId: null}); } catch {}
+  showToast("🗑️ QR code removed.");
 }
 
 // ── MODAL ─────────────────────────────────────────────────────────────────────
