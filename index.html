@@ -372,11 +372,7 @@ let toastT=null, refreshT=null, serverOk=false;
 // ── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener("load", () => {
   const t = localStorage.getItem(TOKEN_KEY);
-  const s = localStorage.getItem(SERVER_KEY) || "https://vip-bot-production-9413.up.railway.app";
-  // Auto-fill token if not saved
-  if (!t && !document.getElementById("tok").value) {
-    document.getElementById("tok").value = "8706598569:AAFsq2tlAiEzCBlB7rwv1pWa3NwkeeG05Nc";
-  }
+  const s = localStorage.getItem(SERVER_KEY) || "";
   if (t) { document.getElementById("tok").value = t; document.getElementById("saved-tag").style.display="block"; }
   document.getElementById("srv").value = s;
   if (t) doConnect(true);
@@ -600,17 +596,23 @@ function renderProducts() {
       <div style="font-size:9px;color:var(--muted);font-family:'JetBrains Mono',monospace">${items.length} item${items.length!==1?"s":""}</div>
     </div>`;
     for(const p of items){
-      html+=`<div class="prod-item">
+      const stockCount=(keyMap[p.id]||[]).length;
+      const isActive=p.active!==false;
+      html+=`<div class="prod-item" style="opacity:${isActive?1:0.5}">
         <div class="prod-emoji">${p.emoji||"🔑"}</div>
         <div class="prod-info">
-          <div class="prod-name">${esc(p.name)}</div>
+          <div class="prod-name">${esc(p.name)} ${isActive
+            ?'<span style="font-size:9px;background:rgba(34,211,165,.12);color:var(--green);border:1px solid rgba(34,211,165,.2);border-radius:20px;padding:1px 6px;font-family:JetBrains Mono,monospace">ACTIVE</span>'
+            :'<span style="font-size:9px;background:rgba(244,63,110,.1);color:var(--red);border:1px solid rgba(244,63,110,.2);border-radius:20px;padding:1px 6px;font-family:JetBrains Mono,monospace">HIDDEN</span>'
+          }</div>
           <div class="prod-desc">${esc(p.description||"")}</div>
-          <div class="prod-stock" style="margin-top:3px">🔑 ${(keyMap[p.id]||[]).length} keys</div>
+          <div class="prod-stock" style="margin-top:3px">🔑 ${stockCount} keys${stockCount===0?'  <span style="color:var(--red);font-size:9px">⚠️ Out of stock</span>':''}</div>
         </div>
         <div class="prod-right">
           <div class="prod-price">₱${p.price}</div>
           <div class="prod-actions">
             <button class="btn btn-outline btn-sm" onclick="openModal('keys','${p.id}','${esc(p.name)}')">+ Keys</button>
+            <button class="btn btn-outline btn-sm" onclick="toggleProd('${p.id}',${!isActive})" title="${isActive?'Hide from bot':'Show in bot'}">${isActive?'🙈':'👁'}</button>
             <button class="btn btn-danger  btn-sm" onclick="delProd('${p.id}')">🗑</button>
           </div>
         </div>
@@ -623,6 +625,11 @@ function renderProducts() {
 async function delProd(id) {
   if(!confirm("Delete this product?")) return;
   try { await af("/products/"+id,"DELETE"); showToast("🗑️ Deleted."); await loadAll(); }
+  catch { showToast("❌ Failed."); }
+}
+
+async function toggleProd(id, active) {
+  try { await af("/products/"+id+"/toggle","PUT",{active}); showToast(active?"👁 Product visible in bot!":"🙈 Product hidden from bot."); await loadAll(); }
   catch { showToast("❌ Failed."); }
 }
 

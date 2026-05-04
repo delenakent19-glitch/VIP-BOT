@@ -78,14 +78,16 @@ bot.onText(/\/start/, async (msg) => {
   const name   = msg.from.first_name || "there";
   try {
     await bot.sendMessage(chatId,
-      `<b>Hello, ${h(name)}!</b>\n` +
-      `Welcome to <b>Zeijie Order Bot</b>\n\n` +
-      `Your trusted store for premium game keys.\n\n` +
-      `<b>What we offer:</b>\n` +
-      `- Instant key delivery after approval\n` +
-      `- GCash payment accepted\n` +
-      `- Fast, secure &amp; reliable\n\n` +
-      `Tap <b>Buy Key</b> to browse available keys.`,
+      `<b>╔══════════════════════╗</b>\n` +
+      `<b>   🛒 ZEIJIE ORDER BOT 🛒   </b>\n` +
+      `<b>╚══════════════════════╝</b>\n\n` +
+      `👋 Hey, <b>${h(name)}!</b> Welcome back!\n\n` +
+      `<b>━━━━━ WHAT WE OFFER ━━━━━</b>\n` +
+      `  ⚡  Instant key delivery\n` +
+      `  💳  GCash payment accepted\n` +
+      `  🔒  Fast, secure and reliable\n\n` +
+      `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+      `👇 Tap <b>Buy Key</b> to browse products!`,
       {
         parse_mode: "HTML",
         reply_markup: {
@@ -107,18 +109,21 @@ bot.onText(/\/help/, (msg) => sendHelp(msg.chat.id));
 async function sendHelp(chatId) {
   try {
     await bot.sendMessage(chatId,
-      `<b>How It Works</b>\n\n` +
-      `<b>Step 1 - Browse</b>\n` +
-      `Tap Buy Key and pick your product.\n\n` +
-      `<b>Step 2 - Pay</b>\n` +
-      `Send payment via GCash to the number shown.\n\n` +
-      `<b>Step 3 - Screenshot</b>\n` +
-      `Send your payment screenshot in this chat.\n\n` +
-      `<b>Step 4 - Wait</b>\n` +
-      `Admin reviews within 5 minutes on average.\n\n` +
-      `<b>Step 5 - Receive</b>\n` +
-      `Your key will be delivered here automatically!\n\n` +
-      `Need help? Contact the admin directly.`,
+      `<b>╔══════════════════════╗</b>\n` +
+      `<b>    📖 HOW IT WORKS 📖    </b>\n` +
+      `<b>╚══════════════════════╝</b>\n\n` +
+      `<b>1️⃣ BROWSE</b>\n` +
+      `     Tap Buy Key and pick a product.\n\n` +
+      `<b>2️⃣ PAY</b>\n` +
+      `     Send payment via GCash. 💳\n\n` +
+      `<b>3️⃣ SCREENSHOT</b>\n` +
+      `     Send your payment proof here. 📸\n\n` +
+      `<b>4️⃣ WAIT</b>\n` +
+      `     Admin reviews in ~5 minutes. ⏳\n\n` +
+      `<b>5️⃣ RECEIVE</b>\n` +
+      `     Key delivered here instantly! 🔑\n\n` +
+      `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+      `❓ Questions? Contact the admin directly.`,
       HTML
     );
   } catch (e) { console.error("help error:", e.message); }
@@ -131,7 +136,10 @@ async function showProducts(chatId) {
     const products = Object.values(db.products).filter(p => p.active);
     if (products.length === 0) {
       return bot.sendMessage(chatId,
-        `<b>No Products Available</b>\n\nWe are currently restocking.\nPlease check back soon!`,
+        `<b>╔══════════════════════╗</b>\n` +
+        `<b>    😔 OUT OF STOCK 😔    </b>\n` +
+        `<b>╚══════════════════════╝</b>\n\n` +
+        `We are currently restocking.\nPlease check back soon! 🔄`,
         HTML
       );
     }
@@ -144,17 +152,26 @@ async function showProducts(chatId) {
     }
 
     const inline_keyboard = [];
+    let messageText =
+      `<b>╔══════════════════════╗</b>\n` +
+      `<b>     🛍️ SHOP / STORE 🛍️    </b>\n` +
+      `<b>╚══════════════════════╝</b>\n\n`;
+
     for (const [cat, items] of Object.entries(grouped)) {
-      inline_keyboard.push([{ text: `--- ${cat} ---`, callback_data: "noop" }]);
+      messageText += `<b>📂 ${cat}</b>\n`;
       for (const p of items) {
+        messageText += `  • ${p.emoji || "🔑"} <b>${h(p.name)}</b> — P${p.price}\n`;
         inline_keyboard.push([{
           text: `${p.emoji || "🔑"} ${p.name} — P${p.price}`,
           callback_data: `buy_${p.id}`
         }]);
       }
+      messageText += "\n";
     }
 
-    await bot.sendMessage(chatId, "<b>Choose a product:</b>", {
+    messageText += `👇 Tap a product to order:`;
+
+    await bot.sendMessage(chatId, messageText, {
       parse_mode: "HTML",
       reply_markup: { inline_keyboard }
     });
@@ -171,19 +188,26 @@ async function handleMyOrders(chatId) {
 
     if (!myOrders.length) {
       return bot.sendMessage(chatId,
-        `<b>No Orders Yet</b>\n\nYou have not placed any orders.\nTap Buy Key to browse products!`,
+        `<b>╔══════════════════════╗</b>\n` +
+        `<b>    📭 NO ORDERS YET 📭    </b>\n` +
+        `<b>╚══════════════════════╝</b>\n\n` +
+        `You have not placed any orders yet.\n🛒 Tap <b>Buy Key</b> to get started!`,
         HTML
       );
     }
 
-    let reply = `<b>My Orders (last 5)</b>\n\n`;
+    let reply = `<b>╔══════════════════════╗</b>\n` +
+                `<b>  📦 MY ORDERS (LAST 5) 📦  </b>\n` +
+                `<b>╚══════════════════════╝</b>\n\n`;
     for (const o of myOrders) {
-      const icon = o.status === "approved" ? "APPROVED" : o.status === "rejected" ? "REJECTED" : "PENDING";
-      reply += `<b>${h(o.productName)}</b> — P${o.amount}\n`;
-      reply += `  ID: <code>${h(o.id)}</code>\n`;
-      reply += `  Status: ${icon}\n`;
-      reply += `  Date: ${h(phTime(o.createdAt))}\n`;
-      if (o.key) reply += `  Key: <code>${h(o.key)}</code>\n`;
+      const icon = o.status === "approved" ? "✅ APPROVED" : o.status === "rejected" ? "❌ REJECTED" : "⏳ PENDING";
+      reply += `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`;
+      reply += `  🎮 Product : <b>${h(o.productName)}</b>\n`;
+      reply += `  💰 Amount  : P${o.amount}\n`;
+      reply += `  🆔 Order ID: <code>${h(o.id)}</code>\n`;
+      reply += `  📌 Status  : <b>${icon}</b>\n`;
+      reply += `  📅 Date    : ${h(phTime(o.createdAt))}\n`;
+      if (o.key) reply += `  🔑 Key     : <code>${h(o.key)}</code>\n`;
       reply += "\n";
     }
     return bot.sendMessage(chatId, reply, HTML);
@@ -222,7 +246,8 @@ bot.on("message", async (msg) => {
         return await handlePayment(msg, state);
       } else {
         return bot.sendMessage(chatId,
-          `<b>Screenshot Required</b>\n\nPlease send your GCash payment screenshot as a photo to complete your order.`,
+          `<b>Screenshot Required</b>\n\n` +
+          `Please send your GCash payment screenshot\nas a photo to complete your order.`,
           HTML
         );
       }
@@ -249,7 +274,10 @@ bot.on("callback_query", async (query) => {
       const keysLeft = (db.keys[pid] || []).length;
       if (keysLeft === 0) {
         return bot.sendMessage(chatId,
-          `<b>Out of Stock</b>\n\n<b>${h(product.name)}</b> is currently unavailable.\nPlease try another product or check back later.`,
+          `<b>╔══════════════════════╗</b>\n` +
+          `<b>    😔 OUT OF STOCK 😔    </b>\n` +
+          `<b>╚══════════════════════╝</b>\n\n` +
+          `<b>${h(product.name)}</b> is currently unavailable.\n🔄 Please try another product or check back later.`,
           HTML
         );
       }
@@ -261,16 +289,19 @@ bot.on("callback_query", async (query) => {
       const gcashName = h(process.env.GCASH_NAME   || "Admin");
 
       await bot.sendMessage(chatId,
-        `<b>Order Summary</b>\n\n` +
-        `Product: <b>${h(product.name)}</b>\n` +
-        `Price: <b>P${product.price}</b>\n` +
-        `Stock: ${keysLeft} key${keysLeft !== 1 ? "s" : ""} available\n\n` +
-        `<b>Payment Instructions</b>\n\n` +
-        `Send <b>P${product.price}</b> via GCash to:\n` +
-        `Number: <code>${gcashNum}</code>\n` +
-        `Name: <b>${gcashName}</b>\n\n` +
-        `Now send your <b>payment screenshot</b> here.\n` +
-        `Your key will be delivered after verification.`,
+        `<b>╔══════════════════════╗</b>\n` +
+        `<b>   🧾 ORDER SUMMARY 🧾   </b>\n` +
+        `<b>╚══════════════════════╝</b>\n\n` +
+        `  🎮 Product : <b>${h(product.name)}</b>\n` +
+        `  💰 Price   : <b>P${product.price}</b>\n` +
+        `  📦 Stock   : ${keysLeft} key${keysLeft !== 1 ? "s" : ""} left\n\n` +
+        `<b>━━━ 💳 PAYMENT DETAILS 💳 ━━━</b>\n\n` +
+        `Send <b>P${product.price}</b> via GCash to:\n\n` +
+        `  📱 Number : <code>${gcashNum}</code>\n` +
+        `  👤 Name   : <b>${gcashName}</b>\n\n` +
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+        `📸 Send your <b>payment screenshot</b> here.\n` +
+        `🔑 Key delivered after verification.`,
         HTML
       );
     }
@@ -314,25 +345,31 @@ async function handlePayment(msg, state) {
 
   // Confirm to buyer
   await bot.sendMessage(chatId,
-    `<b>Payment Received!</b>\n\n` +
-    `Your order has been submitted.\n\n` +
-    `Order ID: <code>${h(orderId)}</code>\n` +
-    `Submitted: ${h(phTime(order.createdAt))}\n` +
-    `Status: <b>Under Review</b>\n\n` +
-    `You will receive your key once approved.\n` +
-    `Average wait time: under 5 minutes.`,
+    `<b>╔══════════════════════╗</b>\n` +
+    `<b>  ✅ PAYMENT RECEIVED! ✅  </b>\n` +
+    `<b>╚══════════════════════╝</b>\n\n` +
+    `🎉 Your order has been submitted!\n\n` +
+    `  🆔 Order ID  : <code>${h(orderId)}</code>\n` +
+    `  📅 Submitted : ${h(phTime(order.createdAt))}\n` +
+    `  📌 Status    : <b>⏳ Under Review</b>\n\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+    `🔑 You will receive your key once approved.\n` +
+    `⚡ Average wait: under 5 minutes.`,
     HTML
   );
 
   // Notify admin
   const adminMsg =
-    `<b>NEW ORDER</b>\n\n` +
-    `Buyer: ${h(order.buyerUser)}\n` +
-    `User ID: <code>${chatId}</code>\n` +
-    `Product: <b>${h(product.name)}</b>\n` +
-    `Amount: <b>P${product.price}</b>\n` +
-    `Order ID: <code>${h(orderId)}</code>\n` +
-    `Time: ${h(phTime(order.createdAt))}`;
+    `<b>╔══════════════════════╗</b>\n` +
+    `<b>   🔔 NEW ORDER! 🔔   </b>\n` +
+    `<b>╚══════════════════════╝</b>\n\n` +
+    `  👤 Buyer    : ${h(order.buyerUser)}\n` +
+    `  🆔 User ID  : <code>${chatId}</code>\n` +
+    `  🎮 Product  : <b>${h(product.name)}</b>\n` +
+    `  💰 Amount   : <b>P${product.price}</b>\n` +
+    `  📋 Order ID : <code>${h(orderId)}</code>\n` +
+    `  📅 Time     : ${h(phTime(order.createdAt))}\n\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>`;
 
   const keyboard = {
     inline_keyboard: [[
@@ -386,11 +423,15 @@ async function processApproval(orderId, adminChatId, msgId) {
   }
 
   await bot.sendMessage(order.buyerId,
-    `<b>Order Approved!</b>\n\n` +
+    `<b>╔══════════════════════╗</b>\n` +
+    `<b>  🎉 ORDER APPROVED! 🎉  </b>\n` +
+    `<b>╚══════════════════════╝</b>\n\n` +
     `Your key for <b>${h(order.productName)}</b> is ready!\n\n` +
-    `<b>Your Key:</b>\n<code>${h(key)}</code>\n\n` +
-    `Approved: ${h(phTime(order.approvedAt))}\n\n` +
-    `Tap the key above to copy it.\nThank you for your purchase!`,
+    `<b>━━━━━ 🔑 YOUR KEY 🔑 ━━━━━</b>\n` +
+    `<code>${h(key)}</code>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `  ✅ Approved: ${h(phTime(order.approvedAt))}\n\n` +
+    `👆 Tap the key above to copy it.\n💙 Thank you for your purchase!`,
     HTML
   );
 
@@ -419,11 +460,14 @@ async function processRejection(orderId, adminChatId, msgId) {
   }
 
   await bot.sendMessage(order.buyerId,
-    `<b>Order Declined</b>\n\n` +
-    `Your payment could not be verified.\n\n` +
-    `Order ID: <code>${h(orderId)}</code>\n` +
-    `Reviewed: ${h(phTime(order.rejectedAt))}\n\n` +
-    `If you believe this is an error, contact support with your payment screenshot.`,
+    `<b>╔══════════════════════╗</b>\n` +
+    `<b>   ❌ ORDER DECLINED ❌   </b>\n` +
+    `<b>╚══════════════════════╝</b>\n\n` +
+    `😔 Your payment could not be verified.\n\n` +
+    `  🆔 Order ID : <code>${h(orderId)}</code>\n` +
+    `  📅 Reviewed : ${h(phTime(order.rejectedAt))}\n\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+    `💬 If you believe this is an error,\ncontact support with your payment screenshot.`,
     HTML
   );
 }
@@ -491,6 +535,17 @@ app.post("/api/products", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.put("/api/products/:id/toggle", async (req, res) => {
+  try {
+    const db = await getDB();
+    const p = db.products[req.params.id];
+    if (!p) return res.status(404).json({ error: "not found" });
+    p.active = req.body.active !== false;
+    await saveDB(db);
+    res.json(p);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete("/api/products/:id", async (req, res) => {
   try {
     const db = await getDB();
@@ -530,13 +585,15 @@ app.delete("/api/keys/:productId", async (req, res) => {
 app.post("/api/broadcast", async (req, res) => {
   try {
     const db = await getDB();
-    const { message } = req.body;
+    const { message, parse_mode } = req.body;
     if (!message) return res.status(400).json({ error: "message required" });
-    const buyers = [...new Set(Object.values(db.orders).map(o => o.buyerId))];
+    const buyers = [...new Set(Object.values(db.orders).map(o => o.buyerId).filter(Boolean))];
     let sent = 0, failed = 0;
     for (const id of buyers) {
-      try { await bot.sendMessage(id, message); sent++; }
-      catch { failed++; }
+      try {
+        await bot.sendMessage(id, message, parse_mode ? { parse_mode } : {});
+        sent++;
+      } catch { failed++; }
     }
     res.json({ sent, failed });
   } catch (e) { res.status(500).json({ error: e.message }); }
