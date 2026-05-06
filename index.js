@@ -58,7 +58,7 @@ try {
 
 // ─── DB HELPERS ──────────────────────────────────────────────────────────────
 async function getProducts() {
-  const snap = await db.collection("products").orderBy("createdAt").get();
+  const snap = await db.collection("products").get();
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
@@ -91,14 +91,13 @@ async function updateOrder(id, data) {
 }
 
 async function getOrders(limit = 50) {
-  const snap = await db.collection("orders").orderBy("createdAt", "desc").limit(limit).get();
+  const snap = await db.collection("orders").limit(limit).get();
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 async function getUserOrders(userId) {
   const snap = await db.collection("orders")
     .where("buyerId", "==", String(userId))
-    .orderBy("createdAt", "desc")
     .limit(5)
     .get();
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -121,7 +120,6 @@ async function getStock(productId) {
   const snap = await db.collection("products").doc(productId)
     .collection("stock")
     .where("used", "==", false)
-    .orderBy("createdAt")
     .get();
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
@@ -150,7 +148,6 @@ async function popStockItem(productId) {
   const snap = await db.collection("products").doc(productId)
     .collection("stock")
     .where("used", "==", false)
-    .orderBy("createdAt")
     .limit(1)
     .get();
   if (snap.empty) return null;
