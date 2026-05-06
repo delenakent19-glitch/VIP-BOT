@@ -643,7 +643,7 @@ app.get("/api/products", requireAuth, async (req, res) => {
 
 app.post("/api/products", requireAuth, async (req, res) => {
   try {
-    const { name, price, emoji, description, deliveryNote, stockType, modLink } = req.body;
+    const { name, price, emoji, description, deliveryNote, stockType, modLink, isPromo } = req.body;
     if (!name) return res.status(400).json({ error: "name required" });
     const ref = await db.collection("products").add({
       name, price: price ? Number(price) : null,
@@ -652,6 +652,7 @@ app.post("/api/products", requireAuth, async (req, res) => {
       deliveryFileId: null,
       stockType: stockType || "note",
       modLink: modLink || "",
+      isPromo: isPromo || false,
       active: true,
       createdAt: new Date().toISOString(),
     });
@@ -661,7 +662,7 @@ app.post("/api/products", requireAuth, async (req, res) => {
 
 app.put("/api/products/:id", requireAuth, async (req, res) => {
   try {
-    const { name, price, emoji, description, deliveryNote, active, stockType, modLink } = req.body;
+    const { name, price, emoji, description, deliveryNote, active, stockType, modLink, isPromo } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (price !== undefined) data.price = price ? Number(price) : null;
@@ -671,6 +672,7 @@ app.put("/api/products/:id", requireAuth, async (req, res) => {
     if (active !== undefined) data.active = active;
     if (stockType !== undefined) data.stockType = stockType;
     if (modLink !== undefined) data.modLink = modLink;
+    if (isPromo !== undefined) data.isPromo = isPromo;
     await db.collection("products").doc(req.params.id).update(data);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
