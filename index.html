@@ -670,18 +670,14 @@ function openAddProduct() {
       <textarea class="farea" id="m-deliver" placeholder="Message sent after approval. E.g. login, link, instructions..."></textarea>
     </div>
     <div id="m-stock-wrap" class="mfg" style="display:none">
-      <label class="flabel">Add Stock Items</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div>
-          <label class="flabel">🔑 Keys (one per line)</label>
-          <textarea class="farea" id="m-stock-keys" rows="5" placeholder="KEY-AAAA-1111&#10;KEY-BBBB-2222"></textarea>
-        </div>
-        <div>
-          <label class="flabel">🔗 Links (one per line)</label>
-          <textarea class="farea" id="m-stock-links" rows="5" placeholder="https://example.com/1&#10;https://example.com/2"></textarea>
-        </div>
+      <div class="mfg" style="margin-bottom:8px">
+        <label class="flabel">🔗 Mod Link <span style="color:var(--muted);font-weight:400">(fixed — hindi mababawasan)</span></label>
+        <input class="finput" id="m-mod-link" placeholder="https://example.com/mod-link"/>
+        <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace;display:block">Iisang link lang — lalabas sa bawat delivery pero hindi mababawasan.</span>
       </div>
-      <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace">Dapat pantay ang bilang. Each pair = one delivery per order.</span>
+      <label class="flabel">Add Stock Keys (one per line)</label>
+      <textarea class="farea" id="m-stock-keys" rows="5" placeholder="KEY-AAAA-1111&#10;KEY-BBBB-2222&#10;KEY-CCCC-3333"></textarea>
+      <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace">Each key = one delivery. Keys mababawasan, Mod Link hindi.</span>
     </div>
     <div class="mfoot">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -726,18 +722,14 @@ function openEditProduct(id) {
       <textarea class="farea" id="m-deliver">${esc(p.deliveryNote||'')}</textarea>
     </div>
     <div id="m-stock-wrap" class="mfg" style="${isStock?'':'display:none'}">
-      <label class="flabel">Add More Stock</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div>
-          <label class="flabel">🔑 Keys (one per line)</label>
-          <textarea class="farea" id="m-stock-keys" rows="4" placeholder="KEY-XXXX-1234&#10;KEY-YYYY-5678"></textarea>
-        </div>
-        <div>
-          <label class="flabel">🔗 Links (one per line)</label>
-          <textarea class="farea" id="m-stock-links" rows="4" placeholder="https://link.com/1&#10;https://link.com/2"></textarea>
-        </div>
+      <div class="mfg" style="margin-bottom:8px">
+        <label class="flabel">🔗 Mod Link <span style="color:var(--muted);font-weight:400">(fixed — hindi mababawasan)</span></label>
+        <input class="finput" id="m-mod-link" value="${esc(p.modLink||'')}" placeholder="https://example.com/mod-link"/>
+        <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace;display:block">Iisang link lang — lalabas sa bawat delivery pero hindi mababawasan.</span>
       </div>
-      <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace">Current stock: ${stockCounts[p.id]??'…'} items. Dapat pantay ang bilang ng keys at links.</span>
+      <label class="flabel">Add More Keys (one per line)</label>
+      <textarea class="farea" id="m-stock-keys" rows="4" placeholder="KEY-XXXX-1234&#10;KEY-YYYY-5678"></textarea>
+      <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace">Current stock: ${stockCounts[p.id]??'…'} keys. Mod Link hindi mababawasan.</span>
     </div>
     <div class="mfoot">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
@@ -757,26 +749,15 @@ async function saveNewProduct() {
       price:        document.getElementById("m-price").value || null,
       description:  document.getElementById("m-desc").value.trim(),
       deliveryNote: stockType === "note" ? document.getElementById("m-deliver").value.trim() : "",
+      modLink:      stockType === "stock" ? (document.getElementById("m-mod-link")?.value.trim() || "") : "",
       stockType,
     });
-    // If stock type, upload the initial stock items
+    // If stock type, upload the initial key items
     if (stockType === "stock") {
-      const keysRaw  = (document.getElementById("m-stock-keys")?.value  || "").trim();
-      const linksRaw = (document.getElementById("m-stock-links")?.value || "").trim();
-      const keys  = keysRaw  ? keysRaw.split("\n").map(s => s.trim()).filter(Boolean)  : [];
-      const links = linksRaw ? linksRaw.split("\n").map(s => s.trim()).filter(Boolean) : [];
-      let items = [];
-      if (keys.length && links.length && keys.length === links.length) {
-        items = keys.map((k, i) => `${k}|||${links[i]}`);
-      } else if (keys.length && !links.length) {
-        items = keys;
-      } else if (links.length && !keys.length) {
-        items = links;
-      } else if (keys.length !== links.length) {
-        showToast(`⚠️ Keys (${keys.length}) at Links (${links.length}) hindi pantay!`); return;
-      }
-      if (items.length) {
-        await af(`/products/${p.id}/stock`, "POST", { items });
+      const keysRaw = (document.getElementById("m-stock-keys")?.value || "").trim();
+      const keys = keysRaw ? keysRaw.split("\n").map(s => s.trim()).filter(Boolean) : [];
+      if (keys.length) {
+        await af(`/products/${p.id}/stock`, "POST", { items: keys });
       }
     }
     showToast("✅ Product added!"); closeModal(); await loadAll();
@@ -794,25 +775,14 @@ async function saveEditProduct(id) {
       price:        document.getElementById("m-price").value || null,
       description:  document.getElementById("m-desc").value.trim(),
       deliveryNote: stockType === "note" ? document.getElementById("m-deliver").value.trim() : "",
+      modLink:      stockType === "stock" ? (document.getElementById("m-mod-link")?.value.trim() || "") : "",
       stockType,
     });
-    // If stock type, add new stock items if any entered
+    // If stock type, add new keys if any entered
     if (stockType === "stock") {
-      const keysRaw  = (document.getElementById("m-stock-keys")?.value  || "").trim();
-      const linksRaw = (document.getElementById("m-stock-links")?.value || "").trim();
-      const keys  = keysRaw  ? keysRaw.split("\n").map(s => s.trim()).filter(Boolean)  : [];
-      const links = linksRaw ? linksRaw.split("\n").map(s => s.trim()).filter(Boolean) : [];
-      let items = [];
-      if (keys.length && links.length && keys.length === links.length) {
-        items = keys.map((k, i) => `${k}|||${links[i]}`);
-      } else if (keys.length && !links.length) {
-        items = keys;
-      } else if (links.length && !keys.length) {
-        items = links;
-      } else if (keys.length !== links.length) {
-        showToast(`⚠️ Keys (${keys.length}) at Links (${links.length}) hindi pantay!`); return;
-      }
-      if (items.length) await af(`/products/${id}/stock`, "POST", { items });
+      const keysRaw = (document.getElementById("m-stock-keys")?.value || "").trim();
+      const keys = keysRaw ? keysRaw.split("\n").map(s => s.trim()).filter(Boolean) : [];
+      if (keys.length) await af(`/products/${id}/stock`, "POST", { items: keys });
     }
     showToast("✅ Updated!"); closeModal(); await loadAll();
   } catch (e) { showToast("❌ " + e.message); }
@@ -981,96 +951,44 @@ async function sendBroadcast() {
 async function openManageStock(id, name) {
   let stockData = { count: 0, items: [] };
   try { stockData = await af(`/products/${id}/stock`); } catch {}
+  const prod = allProducts.find(p => p.id === id);
+  const modLink = prod?.modLink || "";
 
   document.getElementById("mbox").innerHTML = `
     <div class="mtitle">🗂️ Manage Stock — ${esc(name)}</div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <span style="font-size:13px;color:var(--muted2)">Available: <b style="color:${stockData.count===0?'var(--red)':'var(--green)'}">${stockData.count} items</b></span>
-      <button class="btn btn-red btn-sm" onclick="clearStockConfirm('${id}')">🗑️ Clear All</button>
+      <span style="font-size:13px;color:var(--muted2)">Keys available: <b style="color:${stockData.count===0?'var(--red)':'var(--green)'}">${stockData.count}</b></span>
+      <button class="btn btn-red btn-sm" onclick="clearStockConfirm('${id}')">🗑️ Clear All Keys</button>
     </div>
-    <div style="background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;margin-bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:11px">
+    ${modLink ? `<div style="font-size:11px;color:var(--accent);font-family:'IBM Plex Mono',monospace;background:rgba(0,212,255,.05);padding:7px 10px;border-radius:6px;border:1px solid rgba(0,212,255,.1);margin-bottom:12px;word-break:break-all">🔗 Mod Link: ${esc(modLink)}</div>` : `<div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-bottom:12px">⚠️ Walang Mod Link — i-set sa Edit Product.</div>`}
+    <div style="background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;max-height:140px;overflow-y:auto;margin-bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:11px">
       ${stockData.items.length
         ? stockData.items.map((item, i) => {
-            if (item.value && item.value.includes("|||")) {
-              const sep = item.value.indexOf("|||");
-              const k = item.value.slice(0, sep).trim();
-              const l = item.value.slice(sep + 3).trim();
-              return `<div style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--text)">${i+1}. 🔑 ${esc(k)} &nbsp;|&nbsp; 🔗 ${esc(l)}</div>`;
-            }
-            return `<div style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--text)">${i+1}. ${esc(item.value)}</div>`;
+            const display = item.value?.includes("|||") ? item.value.split("|||")[0].trim() : (item.value || "");
+            return `<div style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--text)">${i+1}. 🔑 ${esc(display)}</div>`;
           }).join("")
-        : `<div style="padding:20px;text-align:center;color:var(--muted)">No stock items</div>`
+        : `<div style="padding:20px;text-align:center;color:var(--muted)">No keys yet</div>`
       }
     </div>
-    <div style="font-size:10px;color:var(--muted2);font-family:'IBM Plex Mono',monospace;margin-bottom:10px">
-      ⚠️ Keys at Links ay i-pair — dapat pantay ang bilang ng linya sa dalawa.
+    <div class="mfg">
+      <label class="flabel">➕ Add Keys (one per line)</label>
+      <textarea class="farea" id="ms-keys" rows="5" placeholder="KEY-AAAA-1111&#10;KEY-BBBB-2222&#10;KEY-CCCC-3333"></textarea>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
-      <div class="mfg">
-        <label class="flabel">🔑 Keys (one per line)</label>
-        <textarea class="farea" id="ms-keys" rows="6" placeholder="KEY-AAAA-1111&#10;KEY-BBBB-2222&#10;KEY-CCCC-3333"></textarea>
-      </div>
-      <div class="mfg">
-        <label class="flabel">🔗 Links (one per line)</label>
-        <textarea class="farea" id="ms-links" rows="6" placeholder="https://example.com/1&#10;https://example.com/2&#10;https://example.com/3"></textarea>
-      </div>
-    </div>
-    <div id="ms-warn" style="font-size:10px;color:var(--red);font-family:'IBM Plex Mono',monospace;min-height:14px;margin-bottom:8px"></div>
     <div class="mfoot">
       <button class="btn btn-outline" onclick="closeModal()">Close</button>
-      <button class="btn btn-accent" onclick="addStockItems('${id}')">➕ Add Items</button>
+      <button class="btn btn-accent" onclick="addStockItems('${id}')">➕ Add Keys</button>
     </div>`;
   document.getElementById("modal").style.display = "flex";
 }
 
 async function addStockItems(id) {
-  const keysRaw  = (document.getElementById("ms-keys")?.value  || "").trim();
-  const linksRaw = (document.getElementById("ms-links")?.value || "").trim();
-  const warnEl   = document.getElementById("ms-warn");
-
-  // Fallback: if only one field exists (old single-textarea), use that
-  const oldRaw = document.getElementById("ms-items")?.value?.trim();
-  if (oldRaw !== undefined) {
-    // old path — shouldn't happen but just in case
-    if (!oldRaw) { showToast("⚠️ Enter items to add"); return; }
-    const items = oldRaw.split("\n").map(s => s.trim()).filter(Boolean);
-    if (!items.length) return;
-    try {
-      const r = await af(`/products/${id}/stock`, "POST", { items });
-      showToast(`✅ Added ${r.added} items! Total: ${r.totalStock}`);
-      stockCounts[id] = r.totalStock;
-      closeModal(); renderProducts();
-    } catch (e) { showToast("❌ " + e.message); }
-    return;
-  }
-
-  if (!keysRaw && !linksRaw) { showToast("⚠️ Enter keys and/or links"); return; }
-
-  const keys  = keysRaw  ? keysRaw.split("\n").map(s => s.trim()).filter(Boolean)  : [];
-  const links = linksRaw ? linksRaw.split("\n").map(s => s.trim()).filter(Boolean) : [];
-
-  // Validation: must be equal count if both are provided
-  if (keys.length && links.length && keys.length !== links.length) {
-    if (warnEl) warnEl.textContent = `⚠️ Hindi pantay! Keys: ${keys.length}, Links: ${links.length}. Dapat parehong bilang.`;
-    showToast(`⚠️ Keys (${keys.length}) at Links (${links.length}) hindi pantay!`);
-    return;
-  }
-  if (warnEl) warnEl.textContent = "";
-
-  let items = [];
-  if (keys.length && links.length) {
-    // Pair each key with its corresponding link
-    items = keys.map((k, i) => `${k}|||${links[i]}`);
-  } else if (keys.length) {
-    items = keys;
-  } else {
-    items = links;
-  }
-
+  const raw = (document.getElementById("ms-keys")?.value || "").trim();
+  if (!raw) { showToast("⚠️ Enter keys to add"); return; }
+  const items = raw.split("\n").map(s => s.trim()).filter(Boolean);
   if (!items.length) return;
   try {
     const r = await af(`/products/${id}/stock`, "POST", { items });
-    showToast(`✅ Added ${r.added} items! Total: ${r.totalStock}`);
+    showToast(`✅ Added ${r.added} keys! Total: ${r.totalStock}`);
     stockCounts[id] = r.totalStock;
     closeModal(); renderProducts();
   } catch (e) { showToast("❌ " + e.message); }

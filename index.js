@@ -478,45 +478,37 @@ async function processApproval(orderId, adminChatId, msgId) {
   // Get product
   const product = await getProduct(order.productId).catch(() => null);
 
-  // Try to pop a stock item (key/link) first
-  let deliveredItem = null;
+  // Pop only the KEY from stock (link is NOT deducted — it stays fixed on the product)
   let deliveredKey  = null;
-  let deliveredLink = null;
+  let deliveredLink = product?.modLink || null;
+
   if (product) {
-    deliveredItem = await popStockItem(order.productId).catch(() => null);
-    if (deliveredItem && deliveredItem.includes("|||")) {
-      const sep = deliveredItem.indexOf("|||");
-      deliveredKey  = deliveredItem.slice(0, sep).trim();
-      deliveredLink = deliveredItem.slice(sep + 3).trim();
+    const rawItem = await popStockItem(order.productId).catch(() => null);
+    if (rawItem) {
+      if (rawItem.includes("|||")) {
+        const sep = rawItem.indexOf("|||");
+        deliveredKey = rawItem.slice(0, sep).trim();
+        // If link was paired inside stock item AND no product.modLink, use the paired one
+        if (!deliveredLink) deliveredLink = rawItem.slice(sep + 3).trim();
+      } else {
+        deliveredKey = rawItem;
+      }
+      await updateOrder(orderId, { deliveredItem: rawItem, deliveredKey, deliveredLink });
     }
   }
 
   // Fallback to deliveryNote if no stock
   const deliveryNote = product?.deliveryNote || null;
-  const hasDelivery  = deliveredItem || deliveryNote;
-
-  // Save what was delivered to order record
-  if (deliveredItem) {
-    await updateOrder(orderId, { deliveredItem });
-  }
 
   // Build delivery block
   let deliveryBlock = "";
-  if (deliveredItem) {
-    if (deliveredKey && deliveredLink) {
-      deliveryBlock =
-        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
-        `📦 <b>YOUR ITEM:</b>\n\n` +
-        `🔑 <b>Key:</b>\n<code>${h(deliveredKey)}</code>\n\n` +
-        `🔗 <b>Link:</b>\n${h(deliveredLink)}\n\n` +
-        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`;
-    } else {
-      deliveryBlock =
-        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
-        `📦 <b>YOUR ITEM:</b>\n\n` +
-        `<code>${h(deliveredItem)}</code>\n\n` +
-        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`;
-    }
+  if (deliveredKey || deliveredLink) {
+    deliveryBlock =
+      `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+      `📦 <b>YOUR ITEM:</b>\n\n` +
+      (deliveredKey  ? `🔑 <b>Key:</b>\n<code>${h(deliveredKey)}</code>\n\n`  : "") +
+      (deliveredLink ? `🔗 <b>Mod Link:</b>\n${h(deliveredLink)}\n\n` : "") +
+      `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`;
   } else if (deliveryNote) {
     deliveryBlock = `<b>━━━ 📝 DELIVERY INFO ━━━</b>\n${h(deliveryNote)}\n\n`;
   }
@@ -556,9 +548,8 @@ async function processApproval(orderId, adminChatId, msgId) {
 
   await bot.sendMessage(adminChatId,
     `✅ Approved & delivered to ${h(order.buyerUser)}` +
-    (deliveredKey && deliveredLink
-      ? `\n🔑 Key: <code>${h(deliveredKey)}</code>\n🔗 Link: ${h(deliveredLink)}`
-      : deliveredItem ? `\n🔑 Sent: <code>${h(deliveredItem)}</code>` : "") +
+    (deliveredKey  ? `\n🔑 Key: <code>${h(deliveredKey)}</code>`  : "") +
+    (deliveredLink ? `\n🔗 Mod Link: ${h(deliveredLink)}` : "") +
     stockWarn,
     HTML
   );
@@ -652,15 +643,15 @@ app.get("/api/products", requireAuth, async (req, res) => {
 
 app.post("/api/products", requireAuth, async (req, res) => {
   try {
-    const { name, price, emoji, description, deliveryNote } = req.body;
+    const { name, price, emoji, description, deliveryNote, stockType, modLink } = req.body;
     if (!name) return res.status(400).json({ error: "name required" });
-    const { stockType } = req.body; // 'stock' or 'note'
     const ref = await db.collection("products").add({
       name, price: price ? Number(price) : null,
       emoji: emoji || "📦", description: description || "",
       deliveryNote: deliveryNote || "",
       deliveryFileId: null,
       stockType: stockType || "note",
+      modLink: modLink || "",
       active: true,
       createdAt: new Date().toISOString(),
     });
@@ -670,7 +661,7 @@ app.post("/api/products", requireAuth, async (req, res) => {
 
 app.put("/api/products/:id", requireAuth, async (req, res) => {
   try {
-    const { name, price, emoji, description, deliveryNote, active } = req.body;
+    const { name, price, emoji, description, deliveryNote, active, stockType, modLink } = req.body;
     const data = {};
     if (name !== undefined) data.name = name;
     if (price !== undefined) data.price = price ? Number(price) : null;
@@ -678,8 +669,8 @@ app.put("/api/products/:id", requireAuth, async (req, res) => {
     if (description !== undefined) data.description = description;
     if (deliveryNote !== undefined) data.deliveryNote = deliveryNote;
     if (active !== undefined) data.active = active;
-    const { stockType } = req.body;
     if (stockType !== undefined) data.stockType = stockType;
+    if (modLink !== undefined) data.modLink = modLink;
     await db.collection("products").doc(req.params.id).update(data);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
