@@ -133,11 +133,18 @@ async function getStockCount(productId) {
 }
 
 async function addStockItems(productId, items) {
-  // items = array of strings
+  // items = array of strings, may be "KEY|||LINK" pairs or plain strings
   const batch = db.batch();
   for (const item of items) {
     const ref = db.collection("products").doc(productId).collection("stock").doc();
-    batch.set(ref, { value: item, used: false, createdAt: new Date().toISOString() });
+    if (item.includes("|||")) {
+      const sep = item.indexOf("|||");
+      const key  = item.slice(0, sep).trim();
+      const link = item.slice(sep + 3).trim();
+      batch.set(ref, { value: item, key, link, used: false, createdAt: new Date().toISOString() });
+    } else {
+      batch.set(ref, { value: item, used: false, createdAt: new Date().toISOString() });
+    }
   }
   await batch.commit();
   return items.length;
@@ -473,8 +480,15 @@ async function processApproval(orderId, adminChatId, msgId) {
 
   // Try to pop a stock item (key/link) first
   let deliveredItem = null;
+  let deliveredKey  = null;
+  let deliveredLink = null;
   if (product) {
     deliveredItem = await popStockItem(order.productId).catch(() => null);
+    if (deliveredItem && deliveredItem.includes("|||")) {
+      const sep = deliveredItem.indexOf("|||");
+      deliveredKey  = deliveredItem.slice(0, sep).trim();
+      deliveredLink = deliveredItem.slice(sep + 3).trim();
+    }
   }
 
   // Fallback to deliveryNote if no stock
@@ -486,18 +500,31 @@ async function processApproval(orderId, adminChatId, msgId) {
     await updateOrder(orderId, { deliveredItem });
   }
 
+  // Build delivery block
+  let deliveryBlock = "";
+  if (deliveredItem) {
+    if (deliveredKey && deliveredLink) {
+      deliveryBlock =
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+        `📦 <b>YOUR ITEM:</b>\n\n` +
+        `🔑 <b>Key:</b>\n<code>${h(deliveredKey)}</code>\n\n` +
+        `🔗 <b>Link:</b>\n${h(deliveredLink)}\n\n` +
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`;
+    } else {
+      deliveryBlock =
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+        `📦 <b>YOUR ITEM:</b>\n\n` +
+        `<code>${h(deliveredItem)}</code>\n\n` +
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`;
+    }
+  } else if (deliveryNote) {
+    deliveryBlock = `<b>━━━ 📝 DELIVERY INFO ━━━</b>\n${h(deliveryNote)}\n\n`;
+  }
+
   await bot.sendMessage(order.buyerId,
     `<b>🎉 ORDER APPROVED!</b>\n\n` +
     `✅ Your order for <b>${h(order.productName)}</b> has been approved!\n\n` +
-    (deliveredItem
-      ? `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
-        `📦 <b>YOUR ITEM:</b>\n\n` +
-        `<code>${h(deliveredItem)}</code>\n\n` +
-        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`
-      : deliveryNote
-        ? `<b>━━━ 📝 DELIVERY INFO ━━━</b>\n${h(deliveryNote)}\n\n`
-        : ""
-    ) +
+    deliveryBlock +
     `  📅 Approved : ${h(phTime())}\n\n` +
     `💙 Thank you for your order!`,
     HTML
@@ -529,7 +556,9 @@ async function processApproval(orderId, adminChatId, msgId) {
 
   await bot.sendMessage(adminChatId,
     `✅ Approved & delivered to ${h(order.buyerUser)}` +
-    (deliveredItem ? `\n🔑 Sent: <code>${h(deliveredItem)}</code>` : "") +
+    (deliveredKey && deliveredLink
+      ? `\n🔑 Key: <code>${h(deliveredKey)}</code>\n🔗 Link: ${h(deliveredLink)}`
+      : deliveredItem ? `\n🔑 Sent: <code>${h(deliveredItem)}</code>` : "") +
     stockWarn,
     HTML
   );
