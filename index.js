@@ -240,35 +240,72 @@ async function sendHelp(chatId) {
 bot.onText(/\/help/, (msg) => sendHelp(msg.chat.id));
 
 // ─── SHOW PRODUCTS ────────────────────────────────────────────────────────────
-async function showProducts(chatId) {
-  const products = await getActiveProducts();
+async function showShopMenu(chatId, msgId = null) {
+  const text =
+    `<b>🛍️ SHOP</b>\n\n` +
+    `Pumili ng category:\n\n` +
+    `🛒 <b>Regular</b> — Normal na products\n` +
+    `🎁 <b>Promo</b> — Limited / special offers`;
+
+  const markup = {
+    inline_keyboard: [
+      [
+        { text: "🛒 Regular", callback_data: "shop_regular" },
+        { text: "🎁 Promo",   callback_data: "shop_promo"   },
+      ]
+    ]
+  };
+
+  if (msgId) {
+    await bot.editMessageText(text, {
+      chat_id: chatId, message_id: msgId,
+      parse_mode: "HTML", reply_markup: markup,
+    }).catch(() => bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: markup }));
+  } else {
+    await bot.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: markup });
+  }
+}
+
+async function showProducts(chatId, category = "regular", msgId = null) {
+  const allActive = await getActiveProducts();
+  const products  = allActive.filter(p => category === "promo" ? p.isPromo : !p.isPromo);
+
+  const catLabel = category === "promo" ? "🎁 PROMO" : "🛒 REGULAR";
+
   if (products.length === 0) {
-    return bot.sendMessage(chatId,
-      `<b>😔 No items available right now.</b>\n\nPlease check back soon! 🔄`, HTML
-    );
+    const emptyText =
+      `<b>${catLabel}</b>\n\n` +
+      `😔 Walang available na items dito ngayon.\n\nPlease check back soon! 🔄`;
+    const markup = { inline_keyboard: [[{ text: "⬅️ Back to Shop", callback_data: "shop_back" }]] };
+    if (msgId) {
+      await bot.editMessageText(emptyText, {
+        chat_id: chatId, message_id: msgId,
+        parse_mode: "HTML", reply_markup: markup,
+      }).catch(() => bot.sendMessage(chatId, emptyText, { parse_mode: "HTML", reply_markup: markup }));
+    } else {
+      await bot.sendMessage(chatId, emptyText, { parse_mode: "HTML", reply_markup: markup });
+    }
+    return;
   }
 
-  let messageText = `<b>🛍️ SHOP</b>\n\n`;
+  let messageText = `<b>${catLabel}</b>\n\n`;
   const inline_keyboard = [];
 
   for (const p of products) {
-    // Check stock count for stock-type products
     let stockCount = null;
     if (p.stockType === "stock") {
       stockCount = await getStockCount(p.id).catch(() => 0);
     }
-
     const outOfStock = p.stockType === "stock" && stockCount === 0;
-    const priceText = p.price ? ` — ₱${p.price}` : "";
-    const stockTag  = outOfStock ? " ❌ OUT OF STOCK" : "";
-    const label     = `${p.emoji || "📦"} ${p.name}${priceText}${stockTag}`;
+    const priceText  = p.price ? ` — ₱${p.price}` : "";
+    const stockTag   = outOfStock ? " ❌ OUT OF STOCK" : "";
+    const label      = `${p.emoji || "📦"} ${p.name}${priceText}${stockTag}`;
 
     messageText += `• ${label}\n`;
     if (p.description) messageText += `  <i>${h(p.description)}</i>\n`;
     messageText += "\n";
 
     if (outOfStock) {
-      // Show button but disabled (clicking shows out of stock message)
       inline_keyboard.push([{ text: label, callback_data: `oos_${p.id}` }]);
     } else {
       inline_keyboard.push([{ text: label, callback_data: `buy_${p.id}` }]);
@@ -276,11 +313,19 @@ async function showProducts(chatId) {
   }
 
   messageText += `👇 Tap an item to order:`;
+  // Back button
+  inline_keyboard.push([{ text: "⬅️ Back to Shop", callback_data: "shop_back" }]);
 
-  await bot.sendMessage(chatId, messageText, {
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard },
-  });
+  const markup = { inline_keyboard };
+
+  if (msgId) {
+    await bot.editMessageText(messageText, {
+      chat_id: chatId, message_id: msgId,
+      parse_mode: "HTML", reply_markup: markup,
+    }).catch(() => bot.sendMessage(chatId, messageText, { parse_mode: "HTML", reply_markup: markup }));
+  } else {
+    await bot.sendMessage(chatId, messageText, { parse_mode: "HTML", reply_markup: markup });
+  }
 }
 
 // ─── MY ORDERS ────────────────────────────────────────────────────────────────
@@ -314,7 +359,7 @@ bot.on("message", async (msg) => {
   if (msg.forward_from || msg.forward_from_chat) return;
   if (text.startsWith("/start")) return;
   if (text === "/help" || text === "ℹ️ Help") return sendHelp(chatId);
-  if (text === "/shop" || text === "🛍️ Shop") return showProducts(chatId);
+  if (text === "/shop" || text === "🛍️ Shop") return showShopMenu(chatId);
   if (text === "/myorders" || text === "📦 My Orders") return handleMyOrders(chatId);
   if (text.startsWith("/")) return;
 
@@ -342,10 +387,24 @@ bot.on("callback_query", async (query) => {
   try {
     if (data === "noop" || data === "done") return;
 
+    // ── Shop category navigation ──
+    if (data === "shop_back") {
+      return await showShopMenu(chatId, msgId);
+    }
+    if (data === "shop_regular") {
+      return await showProducts(chatId, "regular", msgId);
+    }
+    if (data === "shop_promo") {
+      return await showProducts(chatId, "promo", msgId);
+    }
+
     if (data.startsWith("oos_")) {
       await bot.sendMessage(chatId,
         `<b>❌ OUT OF STOCK</b>\n\nSorry, this item is currently out of stock.\n\nPlease check back later! 🔄`,
-        HTML
+        {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [[{ text: "⬅️ Back to Shop", callback_data: "shop_back" }]] }
+        }
       );
       return;
     }
