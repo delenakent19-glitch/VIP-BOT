@@ -477,6 +477,8 @@ async function loadAll() {
     const [orders, products] = await Promise.all([af("/orders"), af("/products")]);
     allOrders = orders;
     allProducts = products;
+    // Load stock counts for each product
+    await loadStockCounts();
     renderStats();
     renderDashOrders();
     if (document.getElementById("page-orders").classList.contains("active")) renderOrderList();
@@ -637,7 +639,30 @@ function openAddProduct() {
       <div class="mfg" style="flex:2"><label class="flabel">Price (₱)</label><input class="finput" id="m-price" type="number" placeholder="100"/></div>
     </div>
     <div class="mfg"><label class="flabel">Description</label><input class="finput" id="m-desc" placeholder="Short description shown to buyers"/></div>
-    <div class="mfg"><label class="flabel">Delivery Note</label><textarea class="farea" id="m-deliver" placeholder="Message sent to buyer after approval. E.g. login credentials, link, instructions..."></textarea></div>
+    <div class="mfg">
+      <label class="flabel">Delivery Type</label>
+      <div style="display:flex;gap:8px;margin-top:2px">
+        <label style="flex:1;cursor:pointer">
+          <input type="radio" name="m-dtype" value="note" checked onchange="toggleDeliveryFields()" style="margin-right:5px"/>
+          <span style="font-size:12px;color:var(--text);font-weight:600">📝 Manual Note</span>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace">Fixed message sent on approve</div>
+        </label>
+        <label style="flex:1;cursor:pointer">
+          <input type="radio" name="m-dtype" value="stock" onchange="toggleDeliveryFields()" style="margin-right:5px"/>
+          <span style="font-size:12px;color:var(--text);font-weight:600">🔑 Key/Link Stock</span>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace">Auto-sends one item per order</div>
+        </label>
+      </div>
+    </div>
+    <div id="m-note-wrap" class="mfg">
+      <label class="flabel">Delivery Note</label>
+      <textarea class="farea" id="m-deliver" placeholder="Message sent after approval. E.g. login, link, instructions..."></textarea>
+    </div>
+    <div id="m-stock-wrap" class="mfg" style="display:none">
+      <label class="flabel">Add Stock Items (one per line)</label>
+      <textarea class="farea" id="m-stock-items" rows="5" placeholder="KEY-AAAA-1111&#10;KEY-BBBB-2222&#10;https://example.com/link1&#10;username:password"></textarea>
+      <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace">Each line = one delivery. Sent one at a time per approved order.</span>
+    </div>
     <div class="mfoot">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
       <button class="btn btn-accent" onclick="saveNewProduct()">Save</button>
@@ -645,9 +670,16 @@ function openAddProduct() {
   document.getElementById("modal").style.display = "flex";
 }
 
+function toggleDeliveryFields() {
+  const isStock = document.querySelector('input[name="m-dtype"]:checked')?.value === "stock";
+  document.getElementById("m-note-wrap").style.display  = isStock ? "none" : "flex";
+  document.getElementById("m-stock-wrap").style.display = isStock ? "flex" : "none";
+}
+
 function openEditProduct(id) {
   const p = allProducts.find(x => x.id === id);
   if (!p) return;
+  const isStock = p.stockType === "stock";
   document.getElementById("mbox").innerHTML = `
     <div class="mtitle">✏️ Edit Item</div>
     <div class="mfg"><label class="flabel">Name *</label><input class="finput" id="m-name" value="${esc(p.name)}"/></div>
@@ -656,7 +688,28 @@ function openEditProduct(id) {
       <div class="mfg" style="flex:2"><label class="flabel">Price (₱)</label><input class="finput" id="m-price" type="number" value="${p.price||''}"/></div>
     </div>
     <div class="mfg"><label class="flabel">Description</label><input class="finput" id="m-desc" value="${esc(p.description||'')}"/></div>
-    <div class="mfg"><label class="flabel">Delivery Note</label><textarea class="farea" id="m-deliver">${esc(p.deliveryNote||'')}</textarea></div>
+    <div class="mfg">
+      <label class="flabel">Delivery Type</label>
+      <div style="display:flex;gap:8px;margin-top:2px">
+        <label style="flex:1;cursor:pointer">
+          <input type="radio" name="m-dtype" value="note" ${!isStock?'checked':''} onchange="toggleDeliveryFields()" style="margin-right:5px"/>
+          <span style="font-size:12px;color:var(--text);font-weight:600">📝 Manual Note</span>
+        </label>
+        <label style="flex:1;cursor:pointer">
+          <input type="radio" name="m-dtype" value="stock" ${isStock?'checked':''} onchange="toggleDeliveryFields()" style="margin-right:5px"/>
+          <span style="font-size:12px;color:var(--text);font-weight:600">🔑 Key/Link Stock</span>
+        </label>
+      </div>
+    </div>
+    <div id="m-note-wrap" class="mfg" style="${isStock?'display:none':''}">
+      <label class="flabel">Delivery Note</label>
+      <textarea class="farea" id="m-deliver">${esc(p.deliveryNote||'')}</textarea>
+    </div>
+    <div id="m-stock-wrap" class="mfg" style="${isStock?'':'display:none'}">
+      <label class="flabel">Add More Stock (one per line)</label>
+      <textarea class="farea" id="m-stock-items" rows="4" placeholder="KEY-XXXX-1234&#10;https://link.com/item"></textarea>
+      <span style="font-size:10px;color:var(--muted);margin-top:4px;font-family:'IBM Plex Mono',monospace">Current stock: ${stockCounts[p.id]??'…'} items. New items will be added to existing stock.</span>
+    </div>
     <div class="mfoot">
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
       <button class="btn btn-accent" onclick="saveEditProduct('${id}')">Update</button>
@@ -667,30 +720,52 @@ function openEditProduct(id) {
 async function saveNewProduct() {
   const name = document.getElementById("m-name").value.trim();
   if (!name) { showToast("⚠️ Name required"); return; }
+  const stockType = document.querySelector('input[name="m-dtype"]:checked')?.value || "note";
   try {
-    await af("/products", "POST", {
+    const p = await af("/products", "POST", {
       name,
       emoji:        document.getElementById("m-emoji").value.trim() || "📦",
       price:        document.getElementById("m-price").value || null,
       description:  document.getElementById("m-desc").value.trim(),
-      deliveryNote: document.getElementById("m-deliver").value.trim(),
+      deliveryNote: stockType === "note" ? document.getElementById("m-deliver").value.trim() : "",
+      stockType,
     });
-    showToast("✅ Product added!"); closeModal(); loadProducts();
+    // If stock type, upload the initial stock items
+    if (stockType === "stock") {
+      const raw = document.getElementById("m-stock-items").value.trim();
+      if (raw) {
+        const items = raw.split("\n").map(s => s.trim()).filter(Boolean);
+        if (items.length) {
+          await af(`/products/${p.id}/stock`, "POST", { items });
+        }
+      }
+    }
+    showToast("✅ Product added!"); closeModal(); await loadAll();
   } catch (e) { showToast("❌ " + e.message); }
 }
 
 async function saveEditProduct(id) {
   const name = document.getElementById("m-name").value.trim();
   if (!name) { showToast("⚠️ Name required"); return; }
+  const stockType = document.querySelector('input[name="m-dtype"]:checked')?.value || "note";
   try {
     await af(`/products/${id}`, "PUT", {
       name,
       emoji:        document.getElementById("m-emoji").value.trim() || "📦",
       price:        document.getElementById("m-price").value || null,
       description:  document.getElementById("m-desc").value.trim(),
-      deliveryNote: document.getElementById("m-deliver").value.trim(),
+      deliveryNote: stockType === "note" ? document.getElementById("m-deliver").value.trim() : "",
+      stockType,
     });
-    showToast("✅ Updated!"); closeModal(); loadProducts();
+    // If stock type, add new stock items if any entered
+    if (stockType === "stock") {
+      const raw = document.getElementById("m-stock-items")?.value.trim();
+      if (raw) {
+        const items = raw.split("\n").map(s => s.trim()).filter(Boolean);
+        if (items.length) await af(`/products/${id}/stock`, "POST", { items });
+      }
+    }
+    showToast("✅ Updated!"); closeModal(); await loadAll();
   } catch (e) { showToast("❌ " + e.message); }
 }
 
@@ -850,6 +925,59 @@ async function sendBroadcast() {
     el.style.display = "block";
     el.textContent = `✅ Sent: ${r.sent} | Failed: ${r.failed}`;
     showToast(`✅ Sent to ${r.sent} users`);
+  } catch (e) { showToast("❌ " + e.message); }
+}
+
+// ── STOCK MANAGER ────────────────────────────────────────────────────────────
+async function openManageStock(id, name) {
+  let stockData = { count: 0, items: [] };
+  try { stockData = await af(`/products/${id}/stock`); } catch {}
+
+  document.getElementById("mbox").innerHTML = `
+    <div class="mtitle">🗂️ Manage Stock — ${esc(name)}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <span style="font-size:13px;color:var(--muted2)">Available: <b style="color:${stockData.count===0?'var(--red)':'var(--green)'}">${stockData.count} items</b></span>
+      <button class="btn btn-red btn-sm" onclick="clearStockConfirm('${id}')">🗑️ Clear All</button>
+    </div>
+    <div style="background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;max-height:160px;overflow-y:auto;margin-bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:11px">
+      ${stockData.items.length
+        ? stockData.items.map((item, i) => `<div style="padding:8px 12px;border-bottom:1px solid var(--border);color:var(--text)">${i+1}. ${esc(item.value)}</div>`).join("")
+        : `<div style="padding:20px;text-align:center;color:var(--muted)">No stock items</div>`
+      }
+    </div>
+    <div class="mfg">
+      <label class="flabel">Add More Items (one per line)</label>
+      <textarea class="farea" id="ms-items" rows="5" placeholder="KEY-AAAA-1111&#10;KEY-BBBB-2222&#10;https://example.com/link1&#10;user:pass"></textarea>
+    </div>
+    <div class="mfoot">
+      <button class="btn btn-outline" onclick="closeModal()">Close</button>
+      <button class="btn btn-accent" onclick="addStockItems('${id}')">➕ Add Items</button>
+    </div>`;
+  document.getElementById("modal").style.display = "flex";
+}
+
+async function addStockItems(id) {
+  const raw = document.getElementById("ms-items").value.trim();
+  if (!raw) { showToast("⚠️ Enter items to add"); return; }
+  const items = raw.split("\n").map(s => s.trim()).filter(Boolean);
+  if (!items.length) return;
+  try {
+    const r = await af(`/products/${id}/stock`, "POST", { items });
+    showToast(`✅ Added ${r.added} items! Total: ${r.totalStock}`);
+    stockCounts[id] = r.totalStock;
+    closeModal();
+    renderProducts();
+  } catch (e) { showToast("❌ " + e.message); }
+}
+
+async function clearStockConfirm(id) {
+  if (!confirm("Clear ALL stock for this product?")) return;
+  try {
+    await af(`/products/${id}/stock`, "DELETE");
+    stockCounts[id] = 0;
+    showToast("🗑️ Stock cleared");
+    closeModal();
+    renderProducts();
   } catch (e) { showToast("❌ " + e.message); }
 }
 

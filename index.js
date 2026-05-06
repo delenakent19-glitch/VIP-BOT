@@ -113,6 +113,60 @@ async function updateSettings(data) {
   await db.collection("settings").doc("main").set(data, { merge: true });
 }
 
+// ─── STOCK HELPERS ───────────────────────────────────────────────────────────
+// Each product can have a "stock" subcollection with individual items (key/link/text)
+// On approve, we pop one item from stock and deliver it. If stock is empty, deliver deliveryNote instead.
+
+async function getStock(productId) {
+  const snap = await db.collection("products").doc(productId)
+    .collection("stock")
+    .where("used", "==", false)
+    .orderBy("createdAt")
+    .get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function getStockCount(productId) {
+  const snap = await db.collection("products").doc(productId)
+    .collection("stock")
+    .where("used", "==", false)
+    .get();
+  return snap.size;
+}
+
+async function addStockItems(productId, items) {
+  // items = array of strings
+  const batch = db.batch();
+  for (const item of items) {
+    const ref = db.collection("products").doc(productId).collection("stock").doc();
+    batch.set(ref, { value: item, used: false, createdAt: new Date().toISOString() });
+  }
+  await batch.commit();
+  return items.length;
+}
+
+async function popStockItem(productId) {
+  // Get oldest unused item and mark as used atomically
+  const snap = await db.collection("products").doc(productId)
+    .collection("stock")
+    .where("used", "==", false)
+    .orderBy("createdAt")
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const doc = snap.docs[0];
+  await doc.ref.update({ used: true, usedAt: new Date().toISOString() });
+  return doc.data().value;
+}
+
+async function clearStock(productId) {
+  const snap = await db.collection("products").doc(productId).collection("stock").get();
+  const batch = db.batch();
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+  return snap.size;
+}
+
 // ─── BOT SETUP ───────────────────────────────────────────────────────────────
 const WEBHOOK_HOST = process.env.RAILWAY_PUBLIC_DOMAIN;
 const bot = new TelegramBot(BOT_TOKEN, { polling: !WEBHOOK_HOST });
@@ -393,29 +447,65 @@ async function processApproval(orderId, adminChatId, msgId) {
     ).catch(() => {});
   }
 
-  // Get delivery note from product if set
+  // Get product
   const product = await getProduct(order.productId).catch(() => null);
+
+  // Try to pop a stock item (key/link) first
+  let deliveredItem = null;
+  if (product) {
+    deliveredItem = await popStockItem(order.productId).catch(() => null);
+  }
+
+  // Fallback to deliveryNote if no stock
   const deliveryNote = product?.deliveryNote || null;
+  const hasDelivery  = deliveredItem || deliveryNote;
+
+  // Save what was delivered to order record
+  if (deliveredItem) {
+    await updateOrder(orderId, { deliveredItem });
+  }
 
   await bot.sendMessage(order.buyerId,
     `<b>🎉 ORDER APPROVED!</b>\n\n` +
     `✅ Your order for <b>${h(order.productName)}</b> has been approved!\n\n` +
-    (deliveryNote ? `<b>━━━ 📝 DELIVERY INFO ━━━</b>\n${h(deliveryNote)}\n\n` : "") +
+    (deliveredItem
+      ? `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n` +
+        `📦 <b>YOUR ITEM:</b>\n\n` +
+        `<code>${h(deliveredItem)}</code>\n\n` +
+        `<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n`
+      : deliveryNote
+        ? `<b>━━━ 📝 DELIVERY INFO ━━━</b>\n${h(deliveryNote)}\n\n`
+        : ""
+    ) +
     `  📅 Approved : ${h(phTime())}\n\n` +
     `💙 Thank you for your order!`,
     HTML
   );
 
-  // If product has a file attached, send it
+  // If product has a file attached, send it too
   if (product?.deliveryFileId) {
     await bot.sendDocument(order.buyerId, product.deliveryFileId, {
-      caption: `📦 Here is your item: <b>${h(order.productName)}</b>`,
+      caption: `📦 File for: <b>${h(order.productName)}</b>`,
       parse_mode: "HTML",
     }).catch(() => {});
   }
 
+  // Warn admin if stock is now low
+  let stockWarn = "";
+  if (product) {
+    const remaining = await getStockCount(order.productId).catch(() => null);
+    if (remaining !== null) {
+      stockWarn = `\n📦 Stock remaining: <b>${remaining}</b>`;
+      if (remaining === 0) stockWarn += " ⚠️ <b>OUT OF STOCK!</b>";
+      else if (remaining <= 3) stockWarn += " ⚠️ Running low!";
+    }
+  }
+
   await bot.sendMessage(adminChatId,
-    `✅ Approved & delivered to ${h(order.buyerUser)}`, HTML
+    `✅ Approved & delivered to ${h(order.buyerUser)}` +
+    (deliveredItem ? `\n🔑 Sent: <code>${h(deliveredItem)}</code>` : "") +
+    stockWarn,
+    HTML
   );
 }
 
@@ -461,12 +551,22 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
-app.get("/",       (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-app.get("/admin",  (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+// ── Token auth middleware for all /api/* routes except /api/botinfo verify ──
+// We validate the token by comparing to BOT_TOKEN env var
+function requireAuth(req, res, next) {
+  const auth = req.headers["authorization"] || "";
+  const token = auth.replace("Bearer ", "").trim();
+  if (!token || token !== BOT_TOKEN) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
+  next();
+}
+
+// Health — no auth needed
 app.get("/health", (req, res) => res.json({ status: "ok", uptime: process.uptime() }));
 
-// Bot info
-app.get("/api/botinfo", async (req, res) => {
+// Bot info — validates token and returns bot details
+app.get("/api/botinfo", requireAuth, async (req, res) => {
   try {
     const info = await bot.getMe();
     res.json({ ok: true, username: info.username, name: info.first_name, adminId: ADMIN_ID });
@@ -474,36 +574,38 @@ app.get("/api/botinfo", async (req, res) => {
 });
 
 // Orders
-app.get("/api/orders", async (req, res) => {
+app.get("/api/orders", requireAuth, async (req, res) => {
   try { res.json(await getOrders(100)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/api/orders/:id/approve", async (req, res) => {
+app.post("/api/orders/:id/approve", requireAuth, async (req, res) => {
   try { await processApproval(req.params.id, ADMIN_ID, null); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/api/orders/:id/reject", async (req, res) => {
+app.post("/api/orders/:id/reject", requireAuth, async (req, res) => {
   try { await processRejection(req.params.id, ADMIN_ID, null); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Products
-app.get("/api/products", async (req, res) => {
+app.get("/api/products", requireAuth, async (req, res) => {
   try { res.json(await getProducts()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/api/products", async (req, res) => {
+app.post("/api/products", requireAuth, async (req, res) => {
   try {
     const { name, price, emoji, description, deliveryNote } = req.body;
     if (!name) return res.status(400).json({ error: "name required" });
+    const { stockType } = req.body; // 'stock' or 'note'
     const ref = await db.collection("products").add({
       name, price: price ? Number(price) : null,
       emoji: emoji || "📦", description: description || "",
       deliveryNote: deliveryNote || "",
       deliveryFileId: null,
+      stockType: stockType || "note",
       active: true,
       createdAt: new Date().toISOString(),
     });
@@ -511,7 +613,7 @@ app.post("/api/products", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.put("/api/products/:id", async (req, res) => {
+app.put("/api/products/:id", requireAuth, async (req, res) => {
   try {
     const { name, price, emoji, description, deliveryNote, active } = req.body;
     const data = {};
@@ -521,20 +623,52 @@ app.put("/api/products/:id", async (req, res) => {
     if (description !== undefined) data.description = description;
     if (deliveryNote !== undefined) data.deliveryNote = deliveryNote;
     if (active !== undefined) data.active = active;
+    const { stockType } = req.body;
+    if (stockType !== undefined) data.stockType = stockType;
     await db.collection("products").doc(req.params.id).update(data);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.delete("/api/products/:id", async (req, res) => {
+app.delete("/api/products/:id", requireAuth, async (req, res) => {
   try {
     await db.collection("products").doc(req.params.id).delete();
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Stock management
+app.get("/api/products/:id/stock", requireAuth, async (req, res) => {
+  try {
+    const items = await getStock(req.params.id);
+    const count = items.length;
+    res.json({ count, items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/products/:id/stock", requireAuth, async (req, res) => {
+  try {
+    // Accept newline-separated or array of items
+    let { items } = req.body;
+    if (typeof items === "string") {
+      items = items.split("\n").map(s => s.trim()).filter(Boolean);
+    }
+    if (!items || !items.length) return res.status(400).json({ error: "No items provided" });
+    const added = await addStockItems(req.params.id, items);
+    const count = await getStockCount(req.params.id);
+    res.json({ ok: true, added, totalStock: count });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/products/:id/stock", requireAuth, async (req, res) => {
+  try {
+    const deleted = await clearStock(req.params.id);
+    res.json({ ok: true, deleted });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Upload delivery file for a product (send file to bot first, use file_id)
-app.put("/api/products/:id/deliveryfile", async (req, res) => {
+app.put("/api/products/:id/deliveryfile", requireAuth, async (req, res) => {
   try {
     const { deliveryFileId } = req.body;
     await db.collection("products").doc(req.params.id).update({ deliveryFileId: deliveryFileId || null });
@@ -543,18 +677,18 @@ app.put("/api/products/:id/deliveryfile", async (req, res) => {
 });
 
 // Settings (QR code, shop name, welcome text, help text, payment info)
-app.get("/api/settings", async (req, res) => {
+app.get("/api/settings", requireAuth, async (req, res) => {
   try { res.json(await getSettings()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.put("/api/settings", async (req, res) => {
+app.put("/api/settings", requireAuth, async (req, res) => {
   try { await updateSettings(req.body); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // QR upload — admin uploads image file → send to Telegram → save file_id
-app.post("/api/settings/qr/upload", upload.single("qr"), async (req, res) => {
+app.post("/api/settings/qr/upload", requireAuth, upload.single("qr"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
@@ -594,13 +728,13 @@ app.post("/api/settings/qr/upload", upload.single("qr"), async (req, res) => {
 });
 
 // QR remove
-app.delete("/api/settings/qr", async (req, res) => {
+app.delete("/api/settings/qr", requireAuth, async (req, res) => {
   try { await updateSettings({ qrFileId: null }); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Broadcast
-app.post("/api/broadcast", async (req, res) => {
+app.post("/api/broadcast", requireAuth, async (req, res) => {
   try {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: "message required" });
@@ -613,6 +747,12 @@ app.post("/api/broadcast", async (req, res) => {
     res.json({ sent, failed });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ─── HTML (must be after all API routes) ─────────────────────────────────────
+app.get("/admin", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/",      (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+// Unknown API routes → JSON 404 instead of HTML
+app.use("/api", (req, res) => res.status(404).json({ ok: false, error: "Not found" }));
 
 // ─── SERVER START ─────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
