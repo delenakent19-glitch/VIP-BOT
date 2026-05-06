@@ -245,11 +245,27 @@ async function showProducts(chatId) {
   const inline_keyboard = [];
 
   for (const p of products) {
-    const label = p.price ? `${p.emoji || "📦"} ${p.name} — ₱${p.price}` : `${p.emoji || "📦"} ${p.name}`;
+    // Check stock count for stock-type products
+    let stockCount = null;
+    if (p.stockType === "stock") {
+      stockCount = await getStockCount(p.id).catch(() => 0);
+    }
+
+    const outOfStock = p.stockType === "stock" && stockCount === 0;
+    const priceText = p.price ? ` — ₱${p.price}` : "";
+    const stockTag  = outOfStock ? " ❌ OUT OF STOCK" : "";
+    const label     = `${p.emoji || "📦"} ${p.name}${priceText}${stockTag}`;
+
     messageText += `• ${label}\n`;
     if (p.description) messageText += `  <i>${h(p.description)}</i>\n`;
     messageText += "\n";
-    inline_keyboard.push([{ text: label, callback_data: `buy_${p.id}` }]);
+
+    if (outOfStock) {
+      // Show button but disabled (clicking shows out of stock message)
+      inline_keyboard.push([{ text: label, callback_data: `oos_${p.id}` }]);
+    } else {
+      inline_keyboard.push([{ text: label, callback_data: `buy_${p.id}` }]);
+    }
   }
 
   messageText += `👇 Tap an item to order:`;
@@ -318,6 +334,14 @@ bot.on("callback_query", async (query) => {
 
   try {
     if (data === "noop" || data === "done") return;
+
+    if (data.startsWith("oos_")) {
+      await bot.sendMessage(chatId,
+        `<b>❌ OUT OF STOCK</b>\n\nSorry, this item is currently out of stock.\n\nPlease check back later! 🔄`,
+        HTML
+      );
+      return;
+    }
 
     if (data.startsWith("buy_")) {
       const pid     = data.replace("buy_", "");
@@ -493,8 +517,13 @@ async function processApproval(orderId, adminChatId, msgId) {
     const remaining = await getStockCount(order.productId).catch(() => null);
     if (remaining !== null) {
       stockWarn = `\n📦 Stock remaining: <b>${remaining}</b>`;
-      if (remaining === 0) stockWarn += " ⚠️ <b>OUT OF STOCK!</b>";
-      else if (remaining <= 3) stockWarn += " ⚠️ Running low!";
+      if (remaining === 0) {
+        stockWarn += " ⚠️ <b>OUT OF STOCK!</b>";
+        // Product stays visible but shows as OUT OF STOCK in shop
+        // Admin gets notified to restock
+      } else if (remaining <= 3) {
+        stockWarn += " ⚠️ Running low! Please restock soon.";
+      }
     }
   }
 
