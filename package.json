@@ -1,19 +1,24 @@
 {
-  "name": "zeijie-order-bot",
-  "version": "1.0.0",
-  "description": "Telegram key seller bot with auto-delivery",
+  "name": "generic-order-bot",
+  "version": "2.0.0",
+  "description": "Generic Telegram Order Bot with Firebase Firestore",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "node-telegram-bot-api": "0.64.0",
-    "express": "4.18.2",
-    "fs-extra": "11.2.0",
-    "dotenv": "16.3.1",
-    "cors": "2.8.5"
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "firebase-admin": "^12.0.0",
+    "form-data": "^4.0.0",
+    "multer": "^1.4.5-lts.1",
+    "node-telegram-bot-api": "^0.64.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
   }
 }
