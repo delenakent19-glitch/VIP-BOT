@@ -1,0 +1,12 @@
+
+  "bot_token": "8619570598:AAFijxJ-QDww4TZflk1StzkaQuRxIjvzgoI",
+  "admin_ids": [8499404621],
+  "channel_username": "Laranasbnschannel",
+  "locked": false,
+  "global_limit": null,
+  "vip_limit": null,
+  "default_threads": 5,
+  "max_concurrent": 30,
+  "cooldown_sessions": null,
+  "cooldown_minutes": 30
+}
